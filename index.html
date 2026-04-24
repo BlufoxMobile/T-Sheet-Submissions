@@ -591,6 +591,101 @@
   }
 
   .hidden { display: none !important; }
+
+  /* DAILY GRID */
+  .daily-hint {
+    color: var(--text-faint);
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  .daily-wrap {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--surface);
+  }
+  .daily-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+    width: max-content;
+    min-width: 100%;
+  }
+  .daily-table th,
+  .daily-table td {
+    padding: 8px 10px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    background: var(--surface);
+  }
+  .daily-table thead th {
+    color: var(--text-dim);
+    font-weight: 500;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border-strong);
+  }
+  .daily-table th.col-store,
+  .daily-table td.col-store {
+    text-align: left;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background: var(--surface);
+    font-weight: 500;
+    min-width: 170px;
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-right: 1px solid var(--border);
+  }
+  .daily-table thead th.col-store {
+    z-index: 3;
+    background: var(--surface-2);
+  }
+  .daily-table th.col-total,
+  .daily-table td.col-total {
+    position: sticky;
+    right: 0;
+    background: var(--surface-2);
+    color: var(--text);
+    font-weight: 600;
+    border-left: 1px solid var(--border-strong);
+  }
+  .daily-table thead th.col-total { z-index: 3; }
+  .daily-table td.cell-zero { color: var(--text-faint); }
+  .daily-table td.cell-today,
+  .daily-table th.col-today {
+    background: #14231a;
+    color: var(--positive);
+  }
+  .daily-table tr.total-row td {
+    background: var(--surface-2);
+    font-weight: 600;
+    border-top: 1px solid var(--border-strong);
+    border-bottom: none;
+  }
+  .daily-table tr.total-row td.col-store { color: var(--text); }
+  .daily-table tr.district-head td {
+    background: var(--bg);
+    color: var(--text-dim);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding-top: 14px;
+    padding-bottom: 6px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .daily-table tr.store-row:hover td:not(.col-total) { background: #141414; }
+  .daily-table tr.store-row:hover td.col-total { background: #1f1f1f; }
 </style>
 </head>
 <body>
@@ -618,6 +713,7 @@
       <button class="tab" data-view="district">Districts</button>
       <button class="tab" data-view="store">Stores</button>
       <button class="tab" data-view="rep">Reps</button>
+      <button class="tab" data-view="daily">Daily</button>
     </div>
   </div>
 </div>
@@ -673,6 +769,14 @@
   <div class="view hidden" id="view-rep">
     <div class="section-title">Reps by store</div>
     <div id="rep-breakdown"></div>
+  </div>
+
+  <div class="view hidden" id="view-daily">
+    <div class="section-title">Submissions per store per day</div>
+    <div class="daily-hint">Scroll horizontally to see all days. Today's column is highlighted.</div>
+    <div class="daily-wrap">
+      <div id="daily-grid"></div>
+    </div>
   </div>
 
   <div class="footer">
@@ -918,6 +1022,7 @@ function render() {
   renderDistrictView(districts, stores);
   renderStoreLeaderboard(stores);
   renderRepView(districts, stores);
+  renderDailyGrid(mtdSubs);
 }
 
 function matchesSearch(text) {
@@ -1124,6 +1229,82 @@ function renderRepView(districts, stores) {
   }).join('');
 
   el.innerHTML = html || '<div class="empty">No matching results</div>';
+}
+
+function renderDailyGrid(mtdSubs) {
+  const el = document.getElementById('daily-grid');
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const today = now.getDate();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  // Build storeName -> day(1..daysInMonth) -> count
+  const counts = {};
+  DISTRICTS.forEach(d => d.stores.forEach(s => {
+    counts[s] = new Array(daysInMonth + 1).fill(0); // index 1..daysInMonth
+  }));
+
+  mtdSubs.forEach(s => {
+    if (!counts[s.store]) return;
+    const d = new Date(s.timestamp);
+    if (d.getFullYear() !== year || d.getMonth() !== month) return;
+    const day = d.getDate();
+    if (day >= 1 && day <= daysInMonth) counts[s.store][day]++;
+  });
+
+  // Day totals across all stores
+  const dayTotals = new Array(daysInMonth + 1).fill(0);
+  let grandTotal = 0;
+  Object.values(counts).forEach(arr => {
+    for (let d = 1; d <= daysInMonth; d++) {
+      dayTotals[d] += arr[d];
+      grandTotal += arr[d];
+    }
+  });
+
+  // Build header row
+  let thead = '<tr><th class="col-store">Store</th>';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const isToday = d === today;
+    thead += `<th class="${isToday ? 'col-today' : ''}" title="Day ${d}">${d}</th>`;
+  }
+  thead += '<th class="col-total">Total</th></tr>';
+
+  // Build body — group by district
+  let tbody = '';
+  DISTRICTS.forEach(dist => {
+    tbody += `<tr class="district-head"><td colspan="${daysInMonth + 2}">${dist.name}</td></tr>`;
+    dist.stores.forEach(storeName => {
+      const row = counts[storeName];
+      let rowTotal = 0;
+      let cells = '';
+      for (let d = 1; d <= daysInMonth; d++) {
+        const v = row[d];
+        rowTotal += v;
+        const classes = [];
+        if (v === 0) classes.push('cell-zero');
+        if (d === today) classes.push('cell-today');
+        cells += `<td class="${classes.join(' ')}">${v || ''}</td>`;
+      }
+      tbody += `<tr class="store-row"><td class="col-store" title="${storeName}">${storeShortName(storeName)}</td>${cells}<td class="col-total">${rowTotal}</td></tr>`;
+    });
+  });
+
+  // Totals row
+  let totals = '<tr class="total-row"><td class="col-store">Grand Total</td>';
+  for (let d = 1; d <= daysInMonth; d++) {
+    const isToday = d === today;
+    totals += `<td class="${isToday ? 'cell-today' : ''}">${dayTotals[d] || ''}</td>`;
+  }
+  totals += `<td class="col-total">${grandTotal}</td></tr>`;
+
+  el.innerHTML = `
+    <table class="daily-table">
+      <thead>${thead}</thead>
+      <tbody>${tbody}${totals}</tbody>
+    </table>
+  `;
 }
 
 function toggleDistrict(key) {
