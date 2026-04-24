@@ -875,7 +875,7 @@ function buildCounts() {
     stores[storeName].mtd++;
     if (isToday(s)) stores[storeName].today++;
 
-    const rep = (s.rep_name || '').trim() || '(unknown)';
+    const rep = String(s.rep_name || '').trim() || '(unknown)';
     if (!stores[storeName].reps[rep]) stores[storeName].reps[rep] = { today: 0, mtd: 0 };
     stores[storeName].reps[rep].mtd++;
     if (isToday(s)) stores[storeName].reps[rep].today++;
@@ -908,7 +908,7 @@ function render() {
 
   const repsTodaySet = new Set();
   todaySubs.forEach(s => {
-    const rep = (s.rep_name || '').trim();
+    const rep = String(s.rep_name || '').trim();
     if (rep) repsTodaySet.add(rep + '|' + s.store);
   });
   document.getElementById('stat-reps').textContent = repsTodaySet.size;
@@ -1164,7 +1164,7 @@ function openStoreDetail(storeName) {
 
 function openRepDetail(repName, storeName) {
   const subs = submissions.filter(s =>
-    (s.rep_name || '').trim() === repName &&
+    String(s.rep_name || '').trim() === repName &&
     s.store === storeName &&
     isThisMonth(s)
   );
