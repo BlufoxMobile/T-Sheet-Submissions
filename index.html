@@ -1228,7 +1228,7 @@ function showModal(opts) {
                         ' · ' +
                         d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
         return '<li class="sub-item"><span class="sub-customer">' +
-               (s.customer_name || '(no customer name)') +
+               (String(s.rep_name || '').trim() || '(no rep name)') +
                '</span><span class="sub-time">' + dateStr + '</span></li>';
       }).join('');
 
