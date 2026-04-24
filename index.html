@@ -710,8 +710,6 @@
     </div>
     <div class="tabs">
       <button class="tab active" data-view="overview">Overview</button>
-      <button class="tab" data-view="district">Districts</button>
-      <button class="tab" data-view="store">Stores</button>
       <button class="tab" data-view="rep">Reps</button>
       <button class="tab" data-view="daily">Daily</button>
     </div>
@@ -754,16 +752,6 @@
   <div class="view" id="view-overview">
     <div class="section-title">Districts</div>
     <div id="district-overview"></div>
-  </div>
-
-  <div class="view hidden" id="view-district">
-    <div class="section-title">All districts — expanded</div>
-    <div id="district-breakdown"></div>
-  </div>
-
-  <div class="view hidden" id="view-store">
-    <div class="section-title">Stores ranked by MTD</div>
-    <div class="leaderboard" id="store-leaderboard"></div>
   </div>
 
   <div class="view hidden" id="view-rep">
@@ -1019,8 +1007,6 @@ function render() {
 
   const { stores, districts } = buildCounts();
   renderOverview(districts, stores);
-  renderDistrictView(districts, stores);
-  renderStoreLeaderboard(stores);
   renderRepView(districts, stores);
   renderDailyGrid(mtdSubs);
 }
