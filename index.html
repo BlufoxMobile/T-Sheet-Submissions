@@ -1350,18 +1350,6 @@ function renderRepView(districts, stores) {
                 <div class="count-value ${sc.mtd ? '' : 'zero'}">${sc.mtd}</div>
                 <div class="count-label">MTD</div>
               </div>
-              <div class="count">
-                <div class="count-value ${sc.internets ? '' : 'zero'}">${sc.internets || 0}</div>
-                <div class="count-label">Internets</div>
-              </div>
-              <div class="count">
-                <div class="count-value ${sc.internets ? '' : 'zero'}">${fmtPct(sc.mtd, sc.internets)}</div>
-                <div class="count-label">Sheet %</div>
-              </div>
-              <div class="count">
-                <div class="count-value ${sc.signedMtd ? '' : 'zero'}">${sc.signedMtd || 0}</div>
-                <div class="count-label">Signed</div>
-              </div>
               <span class="chevron">›</span>
             </div>
           </div>
@@ -1406,18 +1394,6 @@ function renderRepView(districts, stores) {
             <div class="count">
               <div class="count-value ${d.mtd ? '' : 'zero'}">${d.mtd}</div>
               <div class="count-label">MTD</div>
-            </div>
-            <div class="count">
-              <div class="count-value ${d.internets ? '' : 'zero'}">${d.internets || 0}</div>
-              <div class="count-label">Internets</div>
-            </div>
-            <div class="count">
-              <div class="count-value ${d.internets ? '' : 'zero'}">${fmtPct(d.mtd, d.internets)}</div>
-              <div class="count-label">Sheet %</div>
-            </div>
-            <div class="count">
-              <div class="count-value ${d.signedMtd ? '' : 'zero'}">${d.signedMtd || 0}</div>
-              <div class="count-label">Signed</div>
             </div>
           </div>
         </div>
@@ -1717,6 +1693,18 @@ function renderQuoteView() {
                 <div class="count-value ${sc.mtd ? '' : 'zero'}">${sc.mtd}</div>
                 <div class="count-label">MTD</div>
               </div>
+              <div class="count">
+                <div class="count-value ${sc.internets ? '' : 'zero'}">${sc.internets || 0}</div>
+                <div class="count-label">Internets</div>
+              </div>
+              <div class="count">
+                <div class="count-value ${sc.internets ? '' : 'zero'}">${fmtPct(sc.mtd, sc.internets)}</div>
+                <div class="count-label">Sheet %</div>
+              </div>
+              <div class="count">
+                <div class="count-value ${sc.signedMtd ? '' : 'zero'}">${sc.signedMtd || 0}</div>
+                <div class="count-label">Signed</div>
+              </div>
               <span class="chevron">›</span>
             </div>
           </div>
@@ -1761,6 +1749,18 @@ function renderQuoteView() {
             <div class="count">
               <div class="count-value ${d.mtd ? '' : 'zero'}">${d.mtd}</div>
               <div class="count-label">MTD</div>
+            </div>
+            <div class="count">
+              <div class="count-value ${d.internets ? '' : 'zero'}">${d.internets || 0}</div>
+              <div class="count-label">Internets</div>
+            </div>
+            <div class="count">
+              <div class="count-value ${d.internets ? '' : 'zero'}">${fmtPct(d.mtd, d.internets)}</div>
+              <div class="count-label">Sheet %</div>
+            </div>
+            <div class="count">
+              <div class="count-value ${d.signedMtd ? '' : 'zero'}">${d.signedMtd || 0}</div>
+              <div class="count-label">Signed</div>
             </div>
           </div>
         </div>
