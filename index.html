@@ -744,7 +744,7 @@
     <div class="stat">
       <div class="stat-label">Traffic MTD</div>
       <div class="stat-value" id="stat-traffic">0</div>
-      <div class="stat-sub">fiscal traffic</div>
+      <div class="stat-sub">calendar MTD est.</div>
     </div>
     <div class="stat">
       <div class="stat-label">T-Chart %</div>
@@ -1049,8 +1049,11 @@ async function fetchSalesReportTraffic() {
   const headers = data[headerRow].map(h => h ? String(h).trim() : '');
   const iStore   = headers.findIndex(h => h.toLowerCase() === 'store');
   const iRSD     = headers.findIndex(h => h.toLowerCase() === 'rsd');
-  const iFiscalT = headers.findIndex(h => h.toLowerCase() === 'fiscal traffic');
-  if (iStore < 0 || iFiscalT < 0) throw new Error('required cols missing');
+  const iDaily   = headers.findIndex(h => h.toLowerCase() === 'shopper trak daily avg');
+  if (iStore < 0 || iDaily < 0) throw new Error('required cols missing');
+
+  // Calendar-month-to-date estimate: daily avg × calendar days elapsed (today's date in month)
+  const daysElapsed = new Date().getDate();
 
   const out = {};
   for (let i = headerRow + 1; i < data.length; i++) {
@@ -1060,7 +1063,8 @@ async function fetchSalesReportTraffic() {
     if (SALES_REPORT_RSD && (!rsd || !String(rsd).includes(SALES_REPORT_RSD))) continue;
     const excelName = String(row[iStore]).trim();
     const tsheetName = EXCEL_STORE_TO_TSHEET[excelName] || (excelName + ' Xfinity Store');
-    const traffic = Number(row[iFiscalT]) || 0;
+    const dailyAvg = Number(row[iDaily]) || 0;
+    const traffic = Math.round(dailyAvg * daysElapsed);
     if (traffic > 0) out[tsheetName] = traffic;
   }
   return out;
