@@ -712,6 +712,7 @@
       <button class="tab active" data-view="overview">Overview</button>
       <button class="tab" data-view="rep">Reps</button>
       <button class="tab" data-view="daily">Daily</button>
+      <button class="tab" data-view="quote">Internet Quote Sheets</button>
     </div>
   </div>
 </div>
@@ -767,6 +768,33 @@
     </div>
   </div>
 
+  <div class="view hidden" id="view-quote">
+    <div class="stats" style="margin-bottom: 16px;">
+      <div class="stat">
+        <div class="stat-label">Quote sheets today</div>
+        <div class="stat-value" id="quote-stat-today">0</div>
+        <div class="stat-sub">submissions</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Quote sheets MTD</div>
+        <div class="stat-value" id="quote-stat-mtd">0</div>
+        <div class="stat-sub">submissions</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Signed up MTD</div>
+        <div class="stat-value" id="quote-stat-signed">0</div>
+        <div class="stat-sub">outcome = signed up</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Active reps</div>
+        <div class="stat-value" id="quote-stat-reps">0</div>
+        <div class="stat-sub">today</div>
+      </div>
+    </div>
+    <div class="section-title">Internet quote sheets by store &amp; rep</div>
+    <div id="quote-breakdown"></div>
+  </div>
+
   <div class="footer">
     <span id="last-updated">Loading...</span>
     <span class="footer-link" onclick="fetchData(true)">Refresh</span>
@@ -813,6 +841,9 @@
    PASTE YOUR GOOGLE APPS SCRIPT WEB APP URL BELOW
 ============================================================ */
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyQaa1yvggLJuw5dcme74vwAW3hSB3BvzCK40IhLThy-F8KZDFOF6gcyl8psNMd3yD-Cg/exec';
+
+/* Internet Quote Sheets endpoint (deploy of internet-quote-sheets-apps-script.gs). */
+const QUOTE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxEehuxYvy1HD6NeSf-phnZKUitvWveqB_ncKu9lEDl-KNPVxhQCbRyi0A1fzgmva6w/exec';
 
 const DISTRICTS = [
   {
@@ -872,6 +903,7 @@ const STORE_TO_DISTRICT = {};
 DISTRICTS.forEach(d => d.stores.forEach(s => STORE_TO_DISTRICT[s] = d));
 
 let submissions = [];
+let quoteSubmissions = [];
 let currentView = 'overview';
 let searchTerm = '';
 
@@ -911,12 +943,24 @@ async function fetchData(isManual = false) {
     return;
   }
 
+  // Fetch T-Sheets and Internet Quote Sheets in parallel.
+  const tSheetReq = fetch(APPS_SCRIPT_URL + '?t=' + Date.now(), { method: 'GET' })
+    .then(r => r.json());
+
+  const quoteConfigured = QUOTE_SCRIPT_URL && QUOTE_SCRIPT_URL !== 'PASTE_QUOTE_SHEETS_WEB_APP_URL_HERE';
+  const quoteReq = quoteConfigured
+    ? fetch(QUOTE_SCRIPT_URL + '?t=' + Date.now(), { method: 'GET' })
+        .then(r => r.json())
+        .catch(err => { console.error('quote fetch failed', err); return { success: false }; })
+    : Promise.resolve({ success: true, submissions: [] });
+
   try {
-    const res = await fetch(APPS_SCRIPT_URL + '?t=' + Date.now(), { method: 'GET' });
-    const data = await res.json();
+    const [data, quoteData] = await Promise.all([tSheetReq, quoteReq]);
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     submissions = data.submissions || [];
+    quoteSubmissions = (quoteData && quoteData.success && quoteData.submissions) || [];
+
     dot.className = 'status-dot';
     statusText.textContent = 'Live';
 
@@ -1009,6 +1053,7 @@ function render() {
   renderOverview(districts, stores);
   renderRepView(districts, stores);
   renderDailyGrid(mtdSubs);
+  renderQuoteView();
 }
 
 function matchesSearch(text) {
@@ -1413,6 +1458,162 @@ document.getElementById('modal').addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeModal();
 });
+
+/* ============================================================
+   INTERNET QUOTE SHEETS
+============================================================ */
+function buildQuoteCounts() {
+  const stores = {};
+  DISTRICTS.forEach(d => d.stores.forEach(s => {
+    stores[s] = { today: 0, mtd: 0, signedMtd: 0, reps: {} };
+  }));
+
+  quoteSubmissions.forEach(s => {
+    if (!isThisMonth(s)) return;
+    const storeName = s.store;
+    if (!stores[storeName]) stores[storeName] = { today: 0, mtd: 0, signedMtd: 0, reps: {} };
+    stores[storeName].mtd++;
+    if (isToday(s)) stores[storeName].today++;
+    if (String(s.outcome || '').toLowerCase().indexOf('sign') === 0) stores[storeName].signedMtd++;
+
+    const rep = String(s.rep_name || '').trim() || '(unknown)';
+    if (!stores[storeName].reps[rep]) stores[storeName].reps[rep] = { today: 0, mtd: 0 };
+    stores[storeName].reps[rep].mtd++;
+    if (isToday(s)) stores[storeName].reps[rep].today++;
+  });
+
+  const districts = DISTRICTS.map(d => {
+    let today = 0, mtd = 0;
+    d.stores.forEach(s => { today += stores[s].today; mtd += stores[s].mtd; });
+    return Object.assign({}, d, { today, mtd });
+  });
+
+  return { stores, districts };
+}
+
+function renderQuoteView() {
+  const mtd = quoteSubmissions.filter(isThisMonth);
+  const todaySubs = mtd.filter(isToday);
+  const signed = mtd.filter(s => String(s.outcome || '').toLowerCase().indexOf('sign') === 0);
+
+  const repsTodaySet = new Set();
+  todaySubs.forEach(s => {
+    const rep = String(s.rep_name || '').trim();
+    if (rep) repsTodaySet.add(rep + '|' + s.store);
+  });
+
+  const tEl = document.getElementById('quote-stat-today');
+  const mEl = document.getElementById('quote-stat-mtd');
+  const sEl = document.getElementById('quote-stat-signed');
+  const rEl = document.getElementById('quote-stat-reps');
+  if (tEl) tEl.textContent = todaySubs.length;
+  if (mEl) mEl.textContent = mtd.length;
+  if (sEl) sEl.textContent = signed.length;
+  if (rEl) rEl.textContent = repsTodaySet.size;
+
+  const { stores, districts } = buildQuoteCounts();
+  const el = document.getElementById('quote-breakdown');
+  if (!el) return;
+
+  const html = districts.map(d => {
+    const storesHtml = d.stores.map(storeName => {
+      const sc = stores[storeName];
+      const reps = Object.entries(sc.reps)
+        .map(([name, c]) => ({ name, today: c.today, mtd: c.mtd }))
+        .filter(r => matchesSearch(r.name) || matchesSearch(storeName))
+        .sort((a, b) => b.mtd - a.mtd);
+
+      if (searchTerm && reps.length === 0) return '';
+
+      return `
+        <div class="store" data-store="${escapeAttr(storeName)}">
+          <div class="store-header" onclick="toggleStore(this)">
+            <div class="store-name">${storeShortName(storeName)}</div>
+            <div class="counts">
+              <div class="count">
+                <div class="count-value ${sc.today ? '' : 'zero'}">${sc.today}</div>
+                <div class="count-label">Today</div>
+              </div>
+              <div class="count">
+                <div class="count-value ${sc.mtd ? '' : 'zero'}">${sc.mtd}</div>
+                <div class="count-label">MTD</div>
+              </div>
+              <span class="chevron">›</span>
+            </div>
+          </div>
+          <div class="store-body">
+            ${reps.length === 0
+              ? '<div class="store-empty">No quote sheets yet this month</div>'
+              : reps.map(r => `
+                  <div class="rep-row" onclick="openQuoteRepDetail('${escapeAttr(r.name)}','${escapeAttr(storeName)}')">
+                    <div class="rep-name">${r.name}</div>
+                    <div class="counts">
+                      <div class="count">
+                        <div class="count-value ${r.today ? '' : 'zero'}">${r.today}</div>
+                        <div class="count-label">Today</div>
+                      </div>
+                      <div class="count">
+                        <div class="count-value ${r.mtd ? '' : 'zero'}">${r.mtd}</div>
+                        <div class="count-label">MTD</div>
+                      </div>
+                    </div>
+                  </div>
+                `).join('')
+            }
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    if (searchTerm && !storesHtml.trim()) return '';
+
+    return `
+      <div class="district expanded">
+        <div class="district-header">
+          <div class="header-info">
+            <div class="item-name">${d.name}</div>
+            <div class="item-meta">${d.dm}</div>
+          </div>
+          <div class="counts">
+            <div class="count">
+              <div class="count-value ${d.today ? '' : 'zero'}">${d.today}</div>
+              <div class="count-label">Today</div>
+            </div>
+            <div class="count">
+              <div class="count-value ${d.mtd ? '' : 'zero'}">${d.mtd}</div>
+              <div class="count-label">MTD</div>
+            </div>
+          </div>
+        </div>
+        <div class="district-body">${storesHtml}</div>
+      </div>
+    `;
+  }).join('');
+
+  el.innerHTML = html || '<div class="empty">No quote sheets yet</div>';
+}
+
+function openQuoteStoreDetail(storeName) {
+  const subs = quoteSubmissions.filter(s => s.store === storeName && isThisMonth(s));
+  showModal({
+    title: storeShortName(storeName) + ' — Quote Sheets',
+    subtitle: (STORE_TO_DISTRICT[storeName] || {}).name || 'Unassigned',
+    subs: subs
+  });
+}
+
+function openQuoteRepDetail(repName, storeName) {
+  const subs = quoteSubmissions.filter(s =>
+    String(s.rep_name || '').trim() === repName &&
+    s.store === storeName &&
+    isThisMonth(s)
+  );
+  showModal({
+    title: repName + ' — Quote Sheets',
+    subtitle: storeShortName(storeName),
+    subs: subs
+  });
+}
 
 function escapeAttr(str) {
   return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
