@@ -801,6 +801,16 @@
         <div class="stat-value" id="quote-stat-reps">0</div>
         <div class="stat-sub">today</div>
       </div>
+      <div class="stat">
+        <div class="stat-label">Internets MTD</div>
+        <div class="stat-value" id="quote-stat-internets">0</div>
+        <div class="stat-sub">HSI sold</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Sheet %</div>
+        <div class="stat-value" id="quote-stat-pct">—</div>
+        <div class="stat-sub">quote sheets ÷ internets</div>
+      </div>
     </div>
     <div class="section-title">Internet quote sheets by store &amp; rep</div>
     <div id="quote-breakdown"></div>
@@ -886,7 +896,8 @@ const EXCEL_STORE_TO_TSHEET = {
   'Round Lake Beach':'Round Lake Beach Xfinity Store',
   'Calumet City':'Calumet City Xfinity Store'
 };
-let trafficByStore = {}; // { 'Storename Xfinity Store': mtdFiscalTraffic }
+let trafficByStore = {}; // { 'Storename Xfinity Store': mtdCMTDTraffic }
+let internetsByStore = {}; // { 'Storename Xfinity Store': mtdHSISold }
 
 const DISTRICTS = [
   {
@@ -1008,7 +1019,8 @@ async function fetchData(isManual = false) {
 
     submissions = data.submissions || [];
     quoteSubmissions = (quoteData && quoteData.success && quoteData.submissions) || [];
-    trafficByStore = trafficData || {};
+    trafficByStore = (trafficData && trafficData.traffic) || {};
+    internetsByStore = (trafficData && trafficData.internets) || {};
 
     dot.className = 'status-dot';
     statusText.textContent = 'Live';
@@ -1050,12 +1062,14 @@ async function fetchSalesReportTraffic() {
   const iStore   = headers.findIndex(h => h.toLowerCase() === 'store');
   const iRSD     = headers.findIndex(h => h.toLowerCase() === 'rsd');
   const iDaily   = headers.findIndex(h => h.toLowerCase() === 'shopper trak daily avg');
+  const iHSI     = headers.findIndex(h => h.toLowerCase() === 'hsi');
   if (iStore < 0 || iDaily < 0) throw new Error('required cols missing');
 
   // Calendar-month-to-date estimate: daily avg × calendar days elapsed (today's date in month)
   const daysElapsed = new Date().getDate();
 
-  const out = {};
+  const traffic = {};
+  const internets = {};
   for (let i = headerRow + 1; i < data.length; i++) {
     const row = data[i];
     if (!row || !row[iStore]) continue;
@@ -1064,10 +1078,14 @@ async function fetchSalesReportTraffic() {
     const excelName = String(row[iStore]).trim();
     const tsheetName = EXCEL_STORE_TO_TSHEET[excelName] || (excelName + ' Xfinity Store');
     const dailyAvg = Number(row[iDaily]) || 0;
-    const traffic = Math.round(dailyAvg * daysElapsed);
-    if (traffic > 0) out[tsheetName] = traffic;
+    const t = Math.round(dailyAvg * daysElapsed);
+    if (t > 0) traffic[tsheetName] = t;
+    if (iHSI >= 0) {
+      const hsi = Number(row[iHSI]) || 0;
+      if (hsi > 0) internets[tsheetName] = hsi;
+    }
   }
-  return out;
+  return { traffic, internets };
 }
 
 function fmtPct(num, den) {
@@ -1332,6 +1350,18 @@ function renderRepView(districts, stores) {
                 <div class="count-value ${sc.mtd ? '' : 'zero'}">${sc.mtd}</div>
                 <div class="count-label">MTD</div>
               </div>
+              <div class="count">
+                <div class="count-value ${sc.internets ? '' : 'zero'}">${sc.internets || 0}</div>
+                <div class="count-label">Internets</div>
+              </div>
+              <div class="count">
+                <div class="count-value ${sc.internets ? '' : 'zero'}">${fmtPct(sc.mtd, sc.internets)}</div>
+                <div class="count-label">Sheet %</div>
+              </div>
+              <div class="count">
+                <div class="count-value ${sc.signedMtd ? '' : 'zero'}">${sc.signedMtd || 0}</div>
+                <div class="count-label">Signed</div>
+              </div>
               <span class="chevron">›</span>
             </div>
           </div>
@@ -1376,6 +1406,18 @@ function renderRepView(districts, stores) {
             <div class="count">
               <div class="count-value ${d.mtd ? '' : 'zero'}">${d.mtd}</div>
               <div class="count-label">MTD</div>
+            </div>
+            <div class="count">
+              <div class="count-value ${d.internets ? '' : 'zero'}">${d.internets || 0}</div>
+              <div class="count-label">Internets</div>
+            </div>
+            <div class="count">
+              <div class="count-value ${d.internets ? '' : 'zero'}">${fmtPct(d.mtd, d.internets)}</div>
+              <div class="count-label">Sheet %</div>
+            </div>
+            <div class="count">
+              <div class="count-value ${d.signedMtd ? '' : 'zero'}">${d.signedMtd || 0}</div>
+              <div class="count-label">Signed</div>
             </div>
           </div>
         </div>
@@ -1590,13 +1632,13 @@ document.addEventListener('keydown', (e) => {
 function buildQuoteCounts() {
   const stores = {};
   DISTRICTS.forEach(d => d.stores.forEach(s => {
-    stores[s] = { today: 0, mtd: 0, signedMtd: 0, reps: {} };
+    stores[s] = { today: 0, mtd: 0, signedMtd: 0, internets: internetsByStore[s] || 0, reps: {} };
   }));
 
   quoteSubmissions.forEach(s => {
     if (!isThisMonth(s)) return;
     const storeName = s.store;
-    if (!stores[storeName]) stores[storeName] = { today: 0, mtd: 0, signedMtd: 0, reps: {} };
+    if (!stores[storeName]) stores[storeName] = { today: 0, mtd: 0, signedMtd: 0, internets: internetsByStore[storeName] || 0, reps: {} };
     stores[storeName].mtd++;
     if (isToday(s)) stores[storeName].today++;
     if (String(s.outcome || '').toLowerCase().indexOf('sign') === 0) stores[storeName].signedMtd++;
@@ -1608,9 +1650,14 @@ function buildQuoteCounts() {
   });
 
   const districts = DISTRICTS.map(d => {
-    let today = 0, mtd = 0;
-    d.stores.forEach(s => { today += stores[s].today; mtd += stores[s].mtd; });
-    return Object.assign({}, d, { today, mtd });
+    let today = 0, mtd = 0, signedMtd = 0, internets = 0;
+    d.stores.forEach(s => {
+      today += stores[s].today;
+      mtd += stores[s].mtd;
+      signedMtd += stores[s].signedMtd || 0;
+      internets += stores[s].internets || 0;
+    });
+    return Object.assign({}, d, { today, mtd, signedMtd, internets });
   });
 
   return { stores, districts };
@@ -1635,6 +1682,13 @@ function renderQuoteView() {
   if (mEl) mEl.textContent = mtd.length;
   if (sEl) sEl.textContent = signed.length;
   if (rEl) rEl.textContent = repsTodaySet.size;
+
+  // Internet sales total + Sheet % (quote sheets per internet sold)
+  const internetsTotal = Object.values(internetsByStore || {}).reduce((a, b) => a + (b || 0), 0);
+  const iEl = document.getElementById('quote-stat-internets');
+  const pEl = document.getElementById('quote-stat-pct');
+  if (iEl) iEl.textContent = internetsTotal.toLocaleString();
+  if (pEl) pEl.textContent = fmtPct(mtd.length, internetsTotal);
 
   const { stores, districts } = buildQuoteCounts();
   const el = document.getElementById('quote-breakdown');
