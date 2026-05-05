@@ -866,7 +866,9 @@ const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyQaa1yvggLJuw5
 /* Internet Quote Sheets endpoint (deploy of internet-quote-sheets-apps-script.gs). */
 const QUOTE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxEehuxYvy1HD6NeSf-phnZKUitvWveqB_ncKu9lEDl-KNPVxhQCbRyi0A1fzgmva6w/exec';
 
-/* MTD Fiscal Traffic source — pulled from Daily Sales Report xlsx */
+/* MTD Fiscal Traffic source — primary: ShopperTrack xlsx (col F = MTD Traffic).
+   Fallback: Daily Sales Report xlsx daily-avg × days-elapsed estimate. */
+const SHOPPERTRACK_URL = 'https://raw.githubusercontent.com/BlufoxMobile/Daily-Sales-Report/main/data/shoppertrack.xlsx';
 const SALES_REPORT_URL = 'https://raw.githubusercontent.com/BlufoxMobile/Daily-Sales-Report/main/data/Sales%20Report.xlsx';
 const SALES_REPORT_RSD = 'Bilbrey'; // Filter Excel rows by RSD name substring
 // Map Excel store names -> T-Sheet store names (handles short→full + the Skokie/South Skokie mismatch)
@@ -1054,6 +1056,52 @@ async function fetchData(isManual = false) {
 
 async function fetchSalesReportTraffic() {
   if (typeof XLSX === 'undefined') { console.warn('SheetJS not loaded'); return {}; }
+
+  // 1) PRIMARY SOURCE — ShopperTrack xlsx (Summary sheet, col D = Location, col F = MTD Traffic)
+  try {
+    const stResp = await fetch(SHOPPERTRACK_URL + '?t=' + Date.now());
+    if (stResp.ok) {
+      const buf = await stResp.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      const ws = wb.Sheets['Summary'] || wb.Sheets[wb.SheetNames[0]];
+      if (ws) {
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        const traffic = {};
+        const internets = {};
+        // Data rows start around row 10 (1-indexed) — RD col B, DM col C,
+        // Location col D, Entity col E, Traffic (MTD) col F.
+        for (let r = 9; r <= range.e.r; r++) {
+          const rdCell  = ws[XLSX.utils.encode_cell({ c: 1, r })]; // B
+          const locCell = ws[XLSX.utils.encode_cell({ c: 3, r })]; // D
+          const trfCell = ws[XLSX.utils.encode_cell({ c: 5, r })]; // F
+          if (!rdCell || !locCell || !trfCell) continue;
+          const rd = String(rdCell.v || '').trim();
+          if (SALES_REPORT_RSD && !rd.toLowerCase().includes(SALES_REPORT_RSD.toLowerCase())) continue;
+          const loc = String(locCell.v || '').trim();
+          if (!loc) continue;
+          const t = Number(trfCell.v) || 0;
+          const tsheetName = EXCEL_STORE_TO_TSHEET[loc] || (loc + ' Xfinity Store');
+          if (t > 0) traffic[tsheetName] = t;
+        }
+        if (Object.keys(traffic).length > 0) {
+          console.log('[traffic] Source: ShopperTrack (' + Object.keys(traffic).length + ' stores)');
+          // Try to also pull HSI from Sales Report — independent, non-fatal
+          try {
+            const hsi = await fetchSalesReportInternets();
+            return { traffic, internets: hsi || {} };
+          } catch (e) {
+            return { traffic, internets: {} };
+          }
+        }
+      }
+    } else {
+      console.warn('ShopperTrack file not found (HTTP ' + stResp.status + ') — falling back to Sales Report estimate');
+    }
+  } catch (e) {
+    console.warn('ShopperTrack fetch failed:', e.message, '— falling back to Sales Report estimate');
+  }
+
+  // 2) FALLBACK — Sales Report daily-avg × days elapsed
   const resp = await fetch(SALES_REPORT_URL + '?t=' + Date.now());
   if (!resp.ok) throw new Error('Sales report HTTP ' + resp.status);
   const buf = await resp.arrayBuffer();
@@ -1098,7 +1146,45 @@ async function fetchSalesReportTraffic() {
       if (hsi > 0) internets[tsheetName] = hsi;
     }
   }
+  console.log('[traffic] Source: Sales Report fallback (daily-avg × ' + daysElapsed + ')');
   return { traffic, internets };
+}
+
+// Pull just the HSI/internets numbers from Sales Report — used when traffic
+// comes from ShopperTrack but we still want internets data.
+async function fetchSalesReportInternets() {
+  const resp = await fetch(SALES_REPORT_URL + '?t=' + Date.now());
+  if (!resp.ok) return {};
+  const buf = await resp.arrayBuffer();
+  const wb = XLSX.read(buf, { type: 'array' });
+  const ws = wb.Sheets['Store Rank'];
+  if (!ws) return {};
+  const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  let headerRow = -1;
+  for (let i = 0; i < Math.min(15, data.length); i++) {
+    const row = data[i];
+    if (row && row.some(c => c && String(c).trim() === 'Rank') && row.some(c => c && String(c).includes('Store'))) {
+      headerRow = i; break;
+    }
+  }
+  if (headerRow < 0) return {};
+  const headers = data[headerRow].map(h => h ? String(h).trim() : '');
+  const iStore = headers.findIndex(h => h.toLowerCase() === 'store');
+  const iRSD   = headers.findIndex(h => h.toLowerCase() === 'rsd');
+  const iHSI   = headers.findIndex(h => h.toLowerCase() === 'hsi');
+  if (iStore < 0 || iHSI < 0) return {};
+  const internets = {};
+  for (let i = headerRow + 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row || !row[iStore]) continue;
+    const rsd = row[iRSD];
+    if (SALES_REPORT_RSD && (!rsd || !String(rsd).includes(SALES_REPORT_RSD))) continue;
+    const excelName = String(row[iStore]).trim();
+    const tsheetName = EXCEL_STORE_TO_TSHEET[excelName] || (excelName + ' Xfinity Store');
+    const hsi = Number(row[iHSI]) || 0;
+    if (hsi > 0) internets[tsheetName] = hsi;
+  }
+  return internets;
 }
 
 function fmtPct(num, den) {
