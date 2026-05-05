@@ -896,6 +896,15 @@ const EXCEL_STORE_TO_TSHEET = {
   'Round Lake Beach':'Round Lake Beach Xfinity Store',
   'Calumet City':'Calumet City Xfinity Store'
 };
+
+// Convert a store name from any source (Excel report, Internet Quote Sheet form, etc.)
+// into the canonical "X Xfinity Store" form used by DISTRICTS / STORE_TO_DISTRICT.
+function normalizeStoreName(raw) {
+  const name = String(raw || '').trim();
+  if (!name) return name;
+  if (name.endsWith(' Xfinity Store')) return name; // already canonical
+  return EXCEL_STORE_TO_TSHEET[name] || (name + ' Xfinity Store');
+}
 let trafficByStore = {}; // { 'Storename Xfinity Store': mtdCMTDTraffic }
 let internetsByStore = {}; // { 'Storename Xfinity Store': mtdHSISold }
 
@@ -1019,6 +1028,10 @@ async function fetchData(isManual = false) {
 
     submissions = data.submissions || [];
     quoteSubmissions = (quoteData && quoteData.success && quoteData.submissions) || [];
+    // The Internet Quote Sheet form returns short store names (e.g. "Evergreen Park").
+    // Normalize them to the canonical "X Xfinity Store" form used by DISTRICTS so they
+    // get attributed to the correct store instead of orphaned keys.
+    quoteSubmissions.forEach(s => { s.store = normalizeStoreName(s.store); });
     trafficByStore = (trafficData && trafficData.traffic) || {};
     internetsByStore = (trafficData && trafficData.internets) || {};
 
