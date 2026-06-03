@@ -962,9 +962,15 @@ const EXCEL_STORE_TO_TSHEET = {
 
 // Convert a store name from any source (Excel report, Internet Quote Sheet form, etc.)
 // into the canonical "X Xfinity Store" form used by DISTRICTS / STORE_TO_DISTRICT.
+// Full-name aliases: when a sheet already submits a canonical-looking
+// "X Xfinity Store" name that must roll up into a different store.
+const STORE_ALIASES = {
+  'South Skokie Xfinity Store': 'Skokie Xfinity Store'
+};
 function normalizeStoreName(raw) {
   const name = String(raw || '').trim();
   if (!name) return name;
+  if (STORE_ALIASES[name]) return STORE_ALIASES[name]; // remap known variants first
   if (name.endsWith(' Xfinity Store')) return name; // already canonical
   return EXCEL_STORE_TO_TSHEET[name] || (name + ' Xfinity Store');
 }
@@ -1090,6 +1096,9 @@ async function fetchData(isManual = false) {
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     submissions = data.submissions || [];
+    // Normalize main T-Sheet store names so variants like
+    // "South Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
+    submissions.forEach(s => { s.store = normalizeStoreName(s.store); });
     quoteSubmissions = (quoteData && quoteData.success && quoteData.submissions) || [];
     // The Internet Quote Sheet form returns short store names (e.g. "Evergreen Park").
     // Normalize them to the canonical "X Xfinity Store" form used by DISTRICTS so they
