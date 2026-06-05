@@ -725,6 +725,7 @@
   .daily-table tr.store-row:hover td:not(.col-total) { background: #141414; }
   .daily-table tr.store-row:hover td.col-total { background: #1f1f1f; }
 </style>
+<script src="https://blufoxmobile.github.io/Daily-Sales-Report/store-aliases.js"></script>
 </head>
 <body>
 
@@ -968,6 +969,7 @@ const STORE_ALIASES = {
   'South Skokie Xfinity Store': 'Skokie Xfinity Store'
 };
 function normalizeStoreName(raw) {
+  if (window.BLUFOX_STORES) return window.BLUFOX_STORES.xfinityStoreName(raw);
   const name = String(raw || '').trim();
   if (!name) return name;
   if (STORE_ALIASES[name]) return STORE_ALIASES[name]; // remap known variants first
