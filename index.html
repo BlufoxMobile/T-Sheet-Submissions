@@ -958,7 +958,10 @@ const EXCEL_STORE_TO_TSHEET = {
   'Elkhart':'Elkhart Xfinity Store',
   'Schererville':'Schererville Xfinity Store',
   'Round Lake Beach':'Round Lake Beach Xfinity Store',
-  'Calumet City':'Calumet City Xfinity Store'
+  'Calumet City':'Calumet City Xfinity Store',
+  'Machesney Park':'Machesney Park Xfinity Store',
+  'Oak Lawn':'Oak Lawn Xfinity Store',
+  'North Knoxville':'North Knoxville Xfinity Store'
 };
 
 // Convert a store name from any source (Excel report, Internet Quote Sheet form, etc.)
@@ -981,58 +984,74 @@ let internetsByStore = {}; // { 'Storename Xfinity Store': mtdHSISold }
 
 const DISTRICTS = [
   {
-    key: 'big-south',
-    name: 'Big South',
-    dm: 'Matthew Brooks',
-    stores: [
-      'Greeneville Xfinity Store',
-      'Johnson City Xfinity Store',
-      'Oak Ridge Xfinity Store',
-      'South Knoxville Xfinity Store'
-    ]
-  },
-  {
     key: 'north-side',
-    name: 'North Side',
+    name: 'Chicago North',
     dm: 'Imaad Dhorajiwala',
     stores: [
-      'Evanston Xfinity Store',
-      'Glenview Xfinity Store',
-      'Kildeer Xfinity Store',
-      'Round Lake Beach Xfinity Store',
       'Skokie Xfinity Store',
-      'Uptown Xfinity Store'
+      'Evanston Xfinity Store',
+      'Machesney Park Xfinity Store',
+      'Uptown Xfinity Store',
+      'Kildeer Xfinity Store',
+      'Cicero Xfinity Store'
     ]
   },
   {
     key: 'south-side',
-    name: 'South Side',
+    name: 'Chicago South',
     dm: 'Juan Carrillo',
     stores: [
-      'Bourbonnais Xfinity Store',
-      'Burbank Xfinity Store',
-      'Calumet City Xfinity Store',
-      'Dekalb Xfinity Store',
-      'Evergreen Park Xfinity Store',
+      'Tinley Park Xfinity Store',
       'Frankfort Xfinity Store',
-      'Tinley Park Xfinity Store'
+      'Bourbonnais Xfinity Store',
+      'Evergreen Park Xfinity Store',
+      'Oak Lawn Xfinity Store'
     ]
   },
   {
     key: 'east-side',
-    name: 'East Side',
+    name: 'Chicago East',
     dm: 'Jacob Cabrales',
     stores: [
-      'Cicero Xfinity Store',
       'Elkhart Xfinity Store',
-      'Hammond Xfinity Store',
-      'Michigan City Xfinity Store',
-      'Schererville Xfinity Store',
       'South Bend Xfinity Store',
-      'Valparaiso Xfinity Store'
+      'Michigan City Xfinity Store',
+      'Valparaiso Xfinity Store',
+      'Schererville Xfinity Store',
+      'Hammond Xfinity Store'
+    ]
+  },
+  {
+    key: 'west-side',
+    name: 'Chicago West',
+    dm: 'Tanzim Chowdhury',
+    stores: [
+      'Calumet City Xfinity Store',
+      'Glenview Xfinity Store',
+      'Round Lake Beach Xfinity Store',
+      'Burbank Xfinity Store',
+      'Dekalb Xfinity Store'
+    ]
+  },
+  {
+    key: 'big-south',
+    name: 'Big South',
+    dm: 'Matthew Brooks',
+    stores: [
+      'Oak Ridge Xfinity Store',
+      'North Knoxville Xfinity Store',
+      'South Knoxville Xfinity Store',
+      'Johnson City Xfinity Store',
+      'Greeneville Xfinity Store'
     ]
   }
 ];
+
+// Canonical key -> label shown in the UI (keeps submission matching intact while
+// displaying the name the market actually uses).
+const STORE_DISPLAY_NAME = {
+  'Skokie Xfinity Store': 'South Skokie'
+};
 
 const STORE_TO_DISTRICT = {};
 DISTRICTS.forEach(d => d.stores.forEach(s => STORE_TO_DISTRICT[s] = d));
@@ -1145,12 +1164,25 @@ async function fetchSalesReportTraffic() {
   }
   if (headerRow < 0) throw new Error('header row not found');
 
-  const headers = data[headerRow].map(h => h ? String(h).trim() : '');
-  const iStore   = headers.findIndex(h => h.toLowerCase() === 'store');
-  const iRSD     = headers.findIndex(h => h.toLowerCase() === 'rsd');
-  const iDaily   = headers.findIndex(h => h.toLowerCase() === 'shopper trak daily avg');
-  const iHSI     = headers.findIndex(h => h.toLowerCase() === 'hsi');
-  if (iStore < 0 || iDaily < 0) throw new Error('required cols missing');
+  // Headers can contain embedded newlines and parenthetical text — normalise before matching.
+  const headers = data[headerRow].map(h => h ? String(h).replace(/\s+/g, ' ').trim() : '');
+  const norm    = headers.map(h => h.toLowerCase());
+  const iStore   = norm.indexOf('store');
+  const iRSD     = norm.indexOf('rsd');
+  const iHSI     = norm.indexOf('hsi');
+
+  // Real MTD fiscal traffic column: "Fiscal Traffic".
+  // Must NOT match "Last Month Fiscal Traffic".
+  const iFiscal  = norm.findIndex(h => h === 'fiscal traffic');
+
+  // Fallback: "Shopper Trak (Comparable Day Traffic) Daily Avg" × calendar days elapsed.
+  // (The old code looked for the literal string "shopper trak daily avg", which does not
+  //  exist in the workbook — findIndex returned -1 and the whole function threw, so every
+  //  store silently rendered 0 traffic.)
+  const iDaily   = norm.findIndex(h => h.includes('shopper trak') && h.includes('daily avg'));
+
+  if (iStore < 0) throw new Error('Store column missing');
+  if (iFiscal < 0 && iDaily < 0) throw new Error('no traffic column found (Fiscal Traffic / Shopper Trak Daily Avg)');
 
   // Calendar-month-to-date estimate: daily avg × calendar days elapsed (today's date in month)
   const daysElapsed = new Date().getDate();
@@ -1163,9 +1195,10 @@ async function fetchSalesReportTraffic() {
     const rsd = row[iRSD];
     if (SALES_REPORT_RSD && (!rsd || !String(rsd).includes(SALES_REPORT_RSD))) continue;
     const excelName = String(row[iStore]).trim();
-    const tsheetName = EXCEL_STORE_TO_TSHEET[excelName] || (excelName + ' Xfinity Store');
-    const dailyAvg = Number(row[iDaily]) || 0;
-    const t = Math.round(dailyAvg * daysElapsed);
+    const tsheetName = normalizeStoreName(excelName);
+    // Prefer the workbook's real Fiscal Traffic figure; fall back to the daily-avg estimate.
+    let t = iFiscal >= 0 ? Math.round(Number(row[iFiscal]) || 0) : 0;
+    if (t <= 0 && iDaily >= 0) t = Math.round((Number(row[iDaily]) || 0) * daysElapsed);
     if (t > 0) traffic[tsheetName] = t;
     if (iHSI >= 0) {
       const hsi = Number(row[iHSI]) || 0;
@@ -1291,10 +1324,16 @@ function render() {
 
 function matchesSearch(text) {
   if (!searchTerm) return true;
-  return text.toLowerCase().includes(searchTerm.toLowerCase());
+  const q = searchTerm.toLowerCase();
+  const raw = String(text || '');
+  if (raw.toLowerCase().includes(q)) return true;
+  // Also match the label the user actually sees (e.g. "South Skokie" for
+  // the store whose canonical key is "Skokie Xfinity Store").
+  const shown = STORE_DISPLAY_NAME[raw];
+  return !!shown && shown.toLowerCase().includes(q);
 }
 
-function storeShortName(s) { return s.replace(' Xfinity Store', ''); }
+function storeShortName(s) { return STORE_DISPLAY_NAME[s] || s.replace(' Xfinity Store', ''); }
 
 function renderOverview(districts, stores) {
   const el = document.getElementById('district-overview');
