@@ -1260,7 +1260,11 @@ function buildCounts() {
 
   submissions.forEach(s => {
     if (!isThisMonth(s)) return;
-    const storeName = s.store;
+    // Normalize the raw submission label before bucketing. The live feed sends
+    // "South Skokie Xfinity Store" (1034x) and a bare "Machesney Park" (138x);
+    // matching s.store verbatim dropped both into orphan buckets that no district
+    // rolls up, so those stores read near-zero on every view.
+    const storeName = normalizeStoreName(s.store);
     if (!stores[storeName]) stores[storeName] = { today: 0, mtd: 0, traffic: trafficByStore[storeName] || 0, reps: {} };
     stores[storeName].mtd++;
     if (isToday(s)) stores[storeName].today++;
@@ -1835,7 +1839,11 @@ function buildQuoteCounts() {
 
   quoteSubmissions.forEach(s => {
     if (!isThisMonth(s)) return;
-    const storeName = s.store;
+    // Normalize the raw submission label before bucketing. The live feed sends
+    // "South Skokie Xfinity Store" (1034x) and a bare "Machesney Park" (138x);
+    // matching s.store verbatim dropped both into orphan buckets that no district
+    // rolls up, so those stores read near-zero on every view.
+    const storeName = normalizeStoreName(s.store);
     if (!stores[storeName]) stores[storeName] = { today: 0, mtd: 0, signedMtd: 0, internets: internetsByStore[storeName] || 0, reps: {} };
     stores[storeName].mtd++;
     if (isToday(s)) stores[storeName].today++;
@@ -2032,7 +2040,11 @@ function buildLastMonthCounts() {
 
   submissions.forEach(s => {
     if (!isLastMonth(s)) return;
-    const storeName = s.store;
+    // Normalize the raw submission label before bucketing. The live feed sends
+    // "South Skokie Xfinity Store" (1034x) and a bare "Machesney Park" (138x);
+    // matching s.store verbatim dropped both into orphan buckets that no district
+    // rolls up, so those stores read near-zero on every view.
+    const storeName = normalizeStoreName(s.store);
     if (!stores[storeName]) stores[storeName] = { total: 0, reps: {} };
     stores[storeName].total++;
     const rep = String(s.rep_name || '').trim() || '(unknown)';
