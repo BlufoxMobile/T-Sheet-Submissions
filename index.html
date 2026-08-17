@@ -933,51 +933,69 @@ const QUOTE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxEehuxYvy1HD6
 /* MTD Fiscal Traffic source — pulled from Daily Sales Report xlsx */
 const SALES_REPORT_URL = 'https://raw.githubusercontent.com/BlufoxMobile/Daily-Sales-Report/main/data/Sales%20Report.xlsx';
 const SALES_REPORT_RSD = 'Bilbrey'; // Filter Excel rows by RSD name substring
-// Map Excel store names -> T-Sheet store names (handles short→full + the Skokie/South Skokie mismatch)
-const EXCEL_STORE_TO_TSHEET = {
-  'Uptown':'Uptown Xfinity Store',
-  'Burbank':'Burbank Xfinity Store',
-  'Hammond':'Hammond Xfinity Store',
-  'Valparaiso':'Valparaiso Xfinity Store',
-  'South Skokie':'Skokie Xfinity Store',
-  'Greeneville':'Greeneville Xfinity Store',
-  'Glenview':'Glenview Xfinity Store',
-  'Cicero':'Cicero Xfinity Store',
-  'South Knoxville':'South Knoxville Xfinity Store',
-  'Johnson City':'Johnson City Xfinity Store',
-  'Evergreen Park':'Evergreen Park Xfinity Store',
-  'Oak Ridge':'Oak Ridge Xfinity Store',
-  'Frankfort':'Frankfort Xfinity Store',
-  'Michigan City':'Michigan City Xfinity Store',
-  'Bourbonnais':'Bourbonnais Xfinity Store',
-  'Dekalb':'Dekalb Xfinity Store',
-  'Evanston':'Evanston Xfinity Store',
-  'Kildeer':'Kildeer Xfinity Store',
-  'Tinley Park':'Tinley Park Xfinity Store',
-  'South Bend':'South Bend Xfinity Store',
-  'Elkhart':'Elkhart Xfinity Store',
-  'Schererville':'Schererville Xfinity Store',
-  'Round Lake Beach':'Round Lake Beach Xfinity Store',
-  'Calumet City':'Calumet City Xfinity Store',
-  'Machesney Park':'Machesney Park Xfinity Store',
-  'Oak Lawn':'Oak Lawn Xfinity Store',
-  'North Knoxville':'North Knoxville Xfinity Store'
-};
+// The Excel report sends SHORT store names ("Uptown", "South Skokie"); every
+// other source sends either the short name or the long "X Xfinity Store" form.
+// There is no per-store mapping table any more: the canonical long form is
+// ALWAYS  <short name> + " Xfinity Store"  (see store-aliases.js, THE ONE RULE),
+// so normalizeStoreName() below covers every store mechanically.
 
 // Convert a store name from any source (Excel report, Internet Quote Sheet form, etc.)
 // into the canonical "X Xfinity Store" form used by DISTRICTS / STORE_TO_DISTRICT.
-// Full-name aliases: when a sheet already submits a canonical-looking
-// "X Xfinity Store" name that must roll up into a different store.
-const STORE_ALIASES = {
-  'South Skokie Xfinity Store': 'Skokie Xfinity Store'
+// Prefers the shared normalizer (store-aliases.js, loaded in <head>); the local
+// fallback below only runs if that script failed to load, and must stay in sync
+// with its INPUT aliases — historical spellings that still appear in live data.
+const FALLBACK_STORE_ALIASES = { // lowercase, " Xfinity Store" already stripped
+  'skokie': 'South Skokie',      // pre-2026 spelling, still in old T-Sheet rows
+  'knoxville': 'South Knoxville' // predates the North Knoxville opening
 };
+const FALLBACK_DIR_EXPAND = {
+  'n':'north', 'n.':'north', 'north':'north', 's':'south', 's.':'south', 'south':'south',
+  'e':'east',  'e.':'east',  'east':'east',   'w':'west',  'w.':'west',  'west':'west'
+};
+// Canonical short names, derived from DISTRICTS so there is no second list to
+// keep in sync. Built lazily because DISTRICTS is declared below.
+let _fallbackStoreIndex = null;
+function fallbackStoreIndex() {
+  if (_fallbackStoreIndex) return _fallbackStoreIndex;
+  const byKey = {}, byBareCity = {};
+  DISTRICTS.forEach(d => d.stores.forEach(long => {
+    const short = long.replace(/\s+Xfinity\s+Store\s*$/i, '');
+    const k = short.toLowerCase();
+    byKey[k] = short;
+    const parts = k.split(' ');
+    if (parts.length > 1 && FALLBACK_DIR_EXPAND[parts[0]] === parts[0]) {
+      const bare = parts.slice(1).join(' ');
+      (byBareCity[bare] = byBareCity[bare] || []).push(short);
+    }
+  }));
+  _fallbackStoreIndex = { byKey, byBareCity };
+  return _fallbackStoreIndex;
+}
+// Mirrors store-aliases.js v2 resolution order: canonical -> alias -> bare city
+// -> abbreviated direction -> unknown (returned cleaned).
+function fallbackShortName(cleaned) {
+  const t = fallbackStoreIndex(), k = cleaned.toLowerCase();
+  if (t.byKey[k]) return t.byKey[k];
+  if (FALLBACK_STORE_ALIASES[k]) return FALLBACK_STORE_ALIASES[k];
+  if (t.byBareCity[k] && t.byBareCity[k].length === 1) return t.byBareCity[k][0];
+  const parts = k.split(' ');
+  if (parts.length > 1 && FALLBACK_DIR_EXPAND[parts[0]]) {
+    const rest = parts.slice(1).join(' ');
+    const expanded = FALLBACK_DIR_EXPAND[parts[0]] + ' ' + rest;
+    if (t.byKey[expanded]) return t.byKey[expanded];
+    if (FALLBACK_STORE_ALIASES[expanded]) return FALLBACK_STORE_ALIASES[expanded];
+    if (t.byKey[rest]) return t.byKey[rest];
+    if (FALLBACK_STORE_ALIASES[rest]) return FALLBACK_STORE_ALIASES[rest];
+  }
+  return cleaned;
+}
 function normalizeStoreName(raw) {
   if (window.BLUFOX_STORES) return window.BLUFOX_STORES.xfinityStoreName(raw);
-  const name = String(raw || '').trim();
-  if (!name) return name;
-  if (STORE_ALIASES[name]) return STORE_ALIASES[name]; // remap known variants first
-  if (name.endsWith(' Xfinity Store')) return name; // already canonical
-  return EXCEL_STORE_TO_TSHEET[name] || (name + ' Xfinity Store');
+  const cleaned = String(raw == null ? '' : raw)
+    .replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+    .replace(/\s+xfinity\s+store\s*$/i, '');  // strip suffix, then re-add canonically
+  if (!cleaned) return '';
+  return fallbackShortName(cleaned) + ' Xfinity Store';
 }
 let trafficByStore = {}; // { 'Storename Xfinity Store': mtdCMTDTraffic }
 let internetsByStore = {}; // { 'Storename Xfinity Store': mtdHSISold }
@@ -988,7 +1006,7 @@ const DISTRICTS = [
     name: 'Chicago North',
     dm: 'Imaad Dhorajiwala',
     stores: [
-      'Skokie Xfinity Store',
+      'South Skokie Xfinity Store',
       'Evanston Xfinity Store',
       'Machesney Park Xfinity Store',
       'Uptown Xfinity Store',
@@ -1046,12 +1064,6 @@ const DISTRICTS = [
     ]
   }
 ];
-
-// Canonical key -> label shown in the UI (keeps submission matching intact while
-// displaying the name the market actually uses).
-const STORE_DISPLAY_NAME = {
-  'Skokie Xfinity Store': 'South Skokie'
-};
 
 const STORE_TO_DISTRICT = {};
 DISTRICTS.forEach(d => d.stores.forEach(s => STORE_TO_DISTRICT[s] = d));
@@ -1117,8 +1129,8 @@ async function fetchData(isManual = false) {
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     submissions = data.submissions || [];
-    // Normalize main T-Sheet store names so variants like
-    // "South Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
+    // Normalize main T-Sheet store names so legacy variants like the pre-2026
+    // "Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
     submissions.forEach(s => { s.store = normalizeStoreName(s.store); });
     quoteSubmissions = (quoteData && quoteData.success && quoteData.submissions) || [];
     // The Internet Quote Sheet form returns short store names (e.g. "Evergreen Park").
@@ -1260,10 +1272,10 @@ function buildCounts() {
 
   submissions.forEach(s => {
     if (!isThisMonth(s)) return;
-    // Normalize the raw submission label before bucketing. The live feed sends
-    // "South Skokie Xfinity Store" (1034x) and a bare "Machesney Park" (138x);
-    // matching s.store verbatim dropped both into orphan buckets that no district
-    // rolls up, so those stores read near-zero on every view.
+    // Normalize the raw submission label before bucketing. The live feed still
+    // carries a legacy "Skokie Xfinity Store" (1x) and a bare "Machesney Park"
+    // (138x); matching s.store verbatim dropped both into orphan buckets that no
+    // district rolls up, so those stores read near-zero on every view.
     const storeName = normalizeStoreName(s.store);
     if (!stores[storeName]) stores[storeName] = { today: 0, mtd: 0, traffic: trafficByStore[storeName] || 0, reps: {} };
     stores[storeName].mtd++;
@@ -1328,16 +1340,10 @@ function render() {
 
 function matchesSearch(text) {
   if (!searchTerm) return true;
-  const q = searchTerm.toLowerCase();
-  const raw = String(text || '');
-  if (raw.toLowerCase().includes(q)) return true;
-  // Also match the label the user actually sees (e.g. "South Skokie" for
-  // the store whose canonical key is "Skokie Xfinity Store").
-  const shown = STORE_DISPLAY_NAME[raw];
-  return !!shown && shown.toLowerCase().includes(q);
+  return String(text || '').toLowerCase().includes(searchTerm.toLowerCase());
 }
 
-function storeShortName(s) { return STORE_DISPLAY_NAME[s] || s.replace(' Xfinity Store', ''); }
+function storeShortName(s) { return s.replace(' Xfinity Store', ''); }
 
 function renderOverview(districts, stores) {
   const el = document.getElementById('district-overview');
@@ -1839,10 +1845,10 @@ function buildQuoteCounts() {
 
   quoteSubmissions.forEach(s => {
     if (!isThisMonth(s)) return;
-    // Normalize the raw submission label before bucketing. The live feed sends
-    // "South Skokie Xfinity Store" (1034x) and a bare "Machesney Park" (138x);
-    // matching s.store verbatim dropped both into orphan buckets that no district
-    // rolls up, so those stores read near-zero on every view.
+    // Normalize the raw submission label before bucketing. The live feed still
+    // carries a legacy "Skokie Xfinity Store" (1x) and a bare "Machesney Park"
+    // (138x); matching s.store verbatim dropped both into orphan buckets that no
+    // district rolls up, so those stores read near-zero on every view.
     const storeName = normalizeStoreName(s.store);
     if (!stores[storeName]) stores[storeName] = { today: 0, mtd: 0, signedMtd: 0, internets: internetsByStore[storeName] || 0, reps: {} };
     stores[storeName].mtd++;
@@ -2040,10 +2046,10 @@ function buildLastMonthCounts() {
 
   submissions.forEach(s => {
     if (!isLastMonth(s)) return;
-    // Normalize the raw submission label before bucketing. The live feed sends
-    // "South Skokie Xfinity Store" (1034x) and a bare "Machesney Park" (138x);
-    // matching s.store verbatim dropped both into orphan buckets that no district
-    // rolls up, so those stores read near-zero on every view.
+    // Normalize the raw submission label before bucketing. The live feed still
+    // carries a legacy "Skokie Xfinity Store" (1x) and a bare "Machesney Park"
+    // (138x); matching s.store verbatim dropped both into orphan buckets that no
+    // district rolls up, so those stores read near-zero on every view.
     const storeName = normalizeStoreName(s.store);
     if (!stores[storeName]) stores[storeName] = { total: 0, reps: {} };
     stores[storeName].total++;
