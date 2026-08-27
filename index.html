@@ -1072,6 +1072,9 @@ let submissions = [];
 let quoteSubmissions = [];
 let currentView = 'overview';
 let searchTerm = '';
+// Set true when a background refresh lands while a detail modal is open, so the
+// page rebuild waits until the user has closed the modal.
+let pendingRender = false;
 
 
 function currentMonthName() {
@@ -1147,7 +1150,13 @@ async function fetchData(isManual = false) {
     document.getElementById('last-updated').textContent =
       'Last sync: ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    render();
+    // Never rebuild the page underneath an open detail modal — the numbers
+    // would shift while the user is reading them. Redraw once it is closed.
+    if (isModalOpen()) {
+      pendingRender = true;
+    } else {
+      render();
+    }
   } catch (err) {
     console.error(err);
     dot.className = 'status-dot error';
@@ -1300,7 +1309,50 @@ function buildCounts() {
   return { stores, districts };
 }
 
+// --- Keeping opened sections open -------------------------------------------
+// The dashboard re-renders itself on every 30s poll (and on search), which
+// replaces the whole breakdown DOM. Expanded districts/stores are tracked only
+// by a CSS class on those nodes, so without this any section the user opened
+// would silently snap shut a few seconds later. Capture what is open just
+// before a render and put it back afterwards, so a section stays open until the
+// user clicks it closed.
+function sectionKey(el) {
+  const view = el.closest('.view');
+  const viewId = view ? view.id : 'root';
+  if (el.classList.contains('district')) return viewId + '|d|' + (el.dataset.key || '');
+  return viewId + '|s|' + (el.dataset.store || '');
+}
+
+function captureExpanded() {
+  const open = new Set();
+  document
+    .querySelectorAll('.district.expanded[data-key], .store.expanded[data-store]')
+    .forEach(el => open.add(sectionKey(el)));
+  return open;
+}
+
+function restoreExpanded(open) {
+  if (!open || !open.size) return;
+  document.querySelectorAll('.district[data-key], .store[data-store]').forEach(el => {
+    if (!open.has(sectionKey(el))) return;
+    // Re-open without replaying the slide-down animation on every poll.
+    const body = el.querySelector(':scope > .district-body, :scope > .store-body');
+    if (body) body.style.transition = 'none';
+    el.classList.add('expanded');
+    if (body) {
+      void body.offsetHeight; // flush the no-transition state
+      body.style.transition = '';
+    }
+  });
+}
+
+function isModalOpen() {
+  const m = document.getElementById('modal');
+  return !!m && m.classList.contains('open');
+}
+
 function render() {
+  const openSections = captureExpanded();
   const mtdSubs = submissions.filter(isThisMonth);
   const todaySubs = mtdSubs.filter(isToday);
   document.getElementById('stat-today').textContent = todaySubs.length;
@@ -1336,6 +1388,8 @@ function render() {
   renderDailyGrid(mtdSubs);
   renderQuoteView();
   renderLastMonthView();
+
+  restoreExpanded(openSections);
 }
 
 function matchesSearch(text) {
@@ -1824,6 +1878,10 @@ function renderQuoteSubItem(s, dateStr) {
 
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
+  if (pendingRender) {
+    pendingRender = false;
+    render();
+  }
 }
 
 document.getElementById('modal').addEventListener('click', (e) => {
