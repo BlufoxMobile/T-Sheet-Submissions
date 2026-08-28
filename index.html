@@ -768,7 +768,7 @@
     <div class="stat">
       <div class="stat-label">Month to date</div>
       <div class="stat-value" id="stat-mtd">0</div>
-      <div class="stat-sub">submissions</div>
+      <div class="stat-sub" id="stat-mtd-sub">submissions</div>
     </div>
     <div class="stat">
       <div class="stat-label">Daily average</div>
@@ -783,7 +783,7 @@
     <div class="stat">
       <div class="stat-label">Traffic MTD</div>
       <div class="stat-value" id="stat-traffic">0</div>
-      <div class="stat-sub">calendar MTD est.</div>
+      <div class="stat-sub" id="stat-traffic-sub">fiscal MTD</div>
     </div>
     <div class="stat">
       <div class="stat-label">T-Chart %</div>
@@ -876,7 +876,7 @@
     <div class="section-title" id="last-month-section-title">Last month — reps by store</div>
     <div id="last-month-breakdown"></div>
     <div id="last-month-empty" class="empty hidden">
-      No archived submissions found. The Apps Script needs to be updated to return last month's data — see the README in the repo.
+      No archived submissions found. The Apps Script needs to be updated to return the previous period's data — see the README in the repo.
     </div>
   </div>
 
@@ -1077,25 +1077,22 @@ let searchTerm = '';
 let pendingRender = false;
 
 
+// Fiscal month name for today, e.g. Aug 28 falls in the Aug 22 - Sep 21
+// period, which is "September".
 function currentMonthName() {
-  const now = new Date();
-  const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-  return months[now.getMonth()];
+  return fiscalLastDay(currentFiscalStart())
+    .toLocaleString(undefined, { month: 'long' });
 }
 
 function updateTitleWithMonth() {
-  const month = currentMonthName();
-  const title = month + ' T-Sheet Submissions';
+  const start = currentFiscalStart();
+  const title = currentMonthName() + ' T-Sheet Submissions';
   document.title = title;
   const titleEl = document.getElementById('page-title');
   if (titleEl) titleEl.textContent = title;
   const subEl = document.getElementById('page-subtitle');
   if (subEl) {
-    const now = new Date();
-    subEl.textContent = now.toLocaleDateString([], { month: 'long', year: 'numeric' });
+    subEl.textContent = fiscalLabel(start) + ' \u00b7 ' + fiscalRangeLabel(start);
   }
 }
 
@@ -1205,8 +1202,10 @@ async function fetchSalesReportTraffic() {
   if (iStore < 0) throw new Error('Store column missing');
   if (iFiscal < 0 && iDaily < 0) throw new Error('no traffic column found (Fiscal Traffic / Shopper Trak Daily Avg)');
 
-  // Calendar-month-to-date estimate: daily avg × calendar days elapsed (today's date in month)
-  const daysElapsed = new Date().getDate();
+  // Fiscal-period-to-date estimate: daily avg × days elapsed since the 22nd.
+  // (Using today's calendar date here would have over-counted every day of the
+  //  month, since the fiscal window restarts on the 22nd, not the 1st.)
+  const daysElapsed = fiscalDaysElapsed(currentFiscalStart());
 
   const traffic = {};
   const internets = {};
@@ -1247,29 +1246,80 @@ function submissionDayKey(s) {
   return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 }
 
-function isThisMonth(s) {
-  const d = new Date(s.timestamp);
-  const now = new Date();
-  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+/* ============================================================
+   FISCAL PERIOD (22nd -> 21st)
+   The business counts traffic from the 22nd of one month through
+   the 21st of the next, so every t-sheet figure on this dashboard
+   uses the same window. A period is NAMED for the month it ends
+   in: Aug 22 - Sep 21 is "September".
+   ============================================================ */
+const FISCAL_START_DAY = 22;
+
+// Whole days between two dates, comparing local midnights so DST
+// shifts can never round a day up or down.
+function dayDiff(a, b) {
+  const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((ua - ub) / 86400000);
 }
 
-// "Last month" relative to today, computed via Date constructor so the
-// year boundary (Dec -> Jan) is handled automatically.
-function lastMonthAnchor() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth() - 1, 1);
+// Start (local midnight on the 22nd) of the fiscal period containing d.
+function fiscalStart(d) {
+  return d.getDate() >= FISCAL_START_DAY
+    ? new Date(d.getFullYear(), d.getMonth(), FISCAL_START_DAY)
+    : new Date(d.getFullYear(), d.getMonth() - 1, FISCAL_START_DAY);
 }
 
-function isLastMonth(s) {
-  const d = new Date(s.timestamp);
-  const lm = lastMonthAnchor();
-  return d.getFullYear() === lm.getFullYear() && d.getMonth() === lm.getMonth();
+// Exclusive end: midnight on the 22nd of the following month.
+function fiscalEnd(start) {
+  return new Date(start.getFullYear(), start.getMonth() + 1, FISCAL_START_DAY);
 }
 
-function lastMonthLabel() {
-  const lm = lastMonthAnchor();
-  return lm.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+// Last day of the period (the 21st).
+function fiscalLastDay(start) {
+  return new Date(start.getFullYear(), start.getMonth() + 1, FISCAL_START_DAY - 1);
 }
+
+// Length of the period in days (28-31, depending on the months it spans).
+function fiscalDayCount(start) { return dayDiff(fiscalEnd(start), start); }
+
+function currentFiscalStart() { return fiscalStart(new Date()); }
+
+function prevFiscalStart() {
+  const s = currentFiscalStart();
+  return new Date(s.getFullYear(), s.getMonth() - 1, FISCAL_START_DAY);
+}
+
+// Days elapsed in the period, including today (1 on the 22nd).
+function fiscalDaysElapsed(start) {
+  const n = dayDiff(new Date(), start) + 1;
+  return Math.min(Math.max(n, 1), fiscalDayCount(start));
+}
+
+function inFiscalPeriod(timestamp, start) {
+  const d = new Date(timestamp);
+  return d >= start && d < fiscalEnd(start);
+}
+
+// "September 2026" - named for the month the period ends in.
+function fiscalLabel(start) {
+  return fiscalLastDay(start).toLocaleString(undefined, { month: 'long', year: 'numeric' });
+}
+
+// "Aug 22 - Sep 21" - the literal window, for subheads.
+function fiscalRangeLabel(start) {
+  const o = { month: 'short', day: 'numeric' };
+  return start.toLocaleDateString([], o) + ' \u2013 ' + fiscalLastDay(start).toLocaleDateString([], o);
+}
+
+function isThisMonth(s) { return inFiscalPeriod(s.timestamp, currentFiscalStart()); }
+
+// "Last month" = the previous fiscal period, e.g. Jul 22 - Aug 21.
+function lastMonthAnchor() { return prevFiscalStart(); }
+
+function isLastMonth(s) { return inFiscalPeriod(s.timestamp, prevFiscalStart()); }
+
+function lastMonthLabel() { return fiscalLabel(prevFiscalStart()); }
 
 function isToday(s) { return submissionDayKey(s) === todayKey(); }
 
@@ -1357,11 +1407,15 @@ function render() {
   const todaySubs = mtdSubs.filter(isToday);
   document.getElementById('stat-today').textContent = todaySubs.length;
   document.getElementById('stat-mtd').textContent = mtdSubs.length;
+  // Spell the fiscal window out so nobody reads "MTD" as the calendar month.
+  const mtdSubEl = document.getElementById('stat-mtd-sub');
+  if (mtdSubEl) mtdSubEl.textContent = fiscalRangeLabel(currentFiscalStart());
 
-  const now = new Date();
+  const periodStart = currentFiscalStart();
+  const elapsed = fiscalDaysElapsed(periodStart);
   let businessDays = 0;
-  for (let day = 1; day <= now.getDate(); day++) {
-    const d = new Date(now.getFullYear(), now.getMonth(), day);
+  for (let i = 0; i < elapsed; i++) {
+    const d = new Date(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate() + i);
     const dow = d.getDay();
     if (dow !== 0 && dow !== 6) businessDays++;
   }
@@ -1616,58 +1670,60 @@ function renderRepView(districts, stores) {
 
 function renderDailyGrid(mtdSubs) {
   const el = document.getElementById('daily-grid');
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
-  const today = now.getDate();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const periodStart = currentFiscalStart();
+  const numDays = fiscalDayCount(periodStart);
+  // Columns run 22, 23 ... end of month, then 1, 2 ... 21 of the next.
+  const cols = [];
+  for (let i = 0; i < numDays; i++) {
+    cols.push(new Date(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate() + i));
+  }
+  const todayIdx = dayDiff(new Date(), periodStart);
 
-  // Build storeName -> day(1..daysInMonth) -> count
+  // Build storeName -> index(0..numDays-1) -> count
   const counts = {};
   DISTRICTS.forEach(d => d.stores.forEach(s => {
-    counts[s] = new Array(daysInMonth + 1).fill(0); // index 1..daysInMonth
+    counts[s] = new Array(numDays).fill(0);
   }));
 
   mtdSubs.forEach(s => {
     if (!counts[s.store]) return;
-    const d = new Date(s.timestamp);
-    if (d.getFullYear() !== year || d.getMonth() !== month) return;
-    const day = d.getDate();
-    if (day >= 1 && day <= daysInMonth) counts[s.store][day]++;
+    const i = dayDiff(new Date(s.timestamp), periodStart);
+    if (i >= 0 && i < numDays) counts[s.store][i]++;
   });
 
   // Day totals across all stores
-  const dayTotals = new Array(daysInMonth + 1).fill(0);
+  const dayTotals = new Array(numDays).fill(0);
   let grandTotal = 0;
   Object.values(counts).forEach(arr => {
-    for (let d = 1; d <= daysInMonth; d++) {
-      dayTotals[d] += arr[d];
-      grandTotal += arr[d];
+    for (let i = 0; i < numDays; i++) {
+      dayTotals[i] += arr[i];
+      grandTotal += arr[i];
     }
   });
 
+  const colTitle = (d) => d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+
   // Build header row
   let thead = '<tr><th class="col-store">Store</th>';
-  for (let d = 1; d <= daysInMonth; d++) {
-    const isToday = d === today;
-    thead += `<th class="${isToday ? 'col-today' : ''}" title="Day ${d}">${d}</th>`;
-  }
+  cols.forEach((d, i) => {
+    thead += `<th class="${i === todayIdx ? 'col-today' : ''}" title="${colTitle(d)}">${d.getDate()}</th>`;
+  });
   thead += '<th class="col-total">Total</th></tr>';
 
   // Build body — group by district
   let tbody = '';
   DISTRICTS.forEach(dist => {
-    tbody += `<tr class="district-head"><td colspan="${daysInMonth + 2}">${dist.name}</td></tr>`;
+    tbody += `<tr class="district-head"><td colspan="${numDays + 2}">${dist.name}</td></tr>`;
     dist.stores.forEach(storeName => {
       const row = counts[storeName];
       let rowTotal = 0;
       let cells = '';
-      for (let d = 1; d <= daysInMonth; d++) {
-        const v = row[d];
+      for (let i = 0; i < numDays; i++) {
+        const v = row[i];
         rowTotal += v;
         const classes = [];
         if (v === 0) classes.push('cell-zero');
-        if (d === today) classes.push('cell-today');
+        if (i === todayIdx) classes.push('cell-today');
         cells += `<td class="${classes.join(' ')}">${v || ''}</td>`;
       }
       tbody += `<tr class="store-row"><td class="col-store" title="${storeName}">${storeShortName(storeName)}</td>${cells}<td class="col-total">${rowTotal}</td></tr>`;
@@ -1676,9 +1732,8 @@ function renderDailyGrid(mtdSubs) {
 
   // Totals row
   let totals = '<tr class="total-row"><td class="col-store">Grand Total</td>';
-  for (let d = 1; d <= daysInMonth; d++) {
-    const isToday = d === today;
-    totals += `<td class="${isToday ? 'cell-today' : ''}">${dayTotals[d] || ''}</td>`;
+  for (let i = 0; i < numDays; i++) {
+    totals += `<td class="${i === todayIdx ? 'cell-today' : ''}">${dayTotals[i] || ''}</td>`;
   }
   totals += `<td class="col-total">${grandTotal}</td></tr>`;
 
@@ -1743,23 +1798,21 @@ function showModal(opts) {
   document.getElementById('modal-title').textContent = opts.title;
   document.getElementById('modal-sub').textContent = opts.subtitle;
 
-  // Anchor the histogram on whichever month the submissions came from.
-  // Defaults to "this month" so existing callers behave the same; the
-  // Last Month tab passes opts.monthAnchor explicitly.
+  // Anchor the histogram on the fiscal period (22nd -> 21st) the submissions
+  // came from. Defaults to the current period; the Last Month tab passes
+  // opts.periodStart explicitly.
   const now = new Date();
-  const anchor = opts.monthAnchor || new Date(now.getFullYear(), now.getMonth(), 1);
-  const isCurrentMonth = anchor.getFullYear() === now.getFullYear() &&
-                         anchor.getMonth() === now.getMonth();
-  const daysInMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
+  const anchor = opts.periodStart || currentFiscalStart();
+  const isCurrentPeriod = anchor.getTime() === currentFiscalStart().getTime();
+  const numDays = fiscalDayCount(anchor);
 
-  const todayCount = isCurrentMonth ? opts.subs.filter(isToday).length : 0;
+  const todayCount = isCurrentPeriod ? opts.subs.filter(isToday).length : 0;
   const mtdCount = opts.subs.length;
 
-  const dayCounts = Array(daysInMonth).fill(0);
+  const dayCounts = Array(numDays).fill(0);
   opts.subs.forEach(s => {
-    const d = new Date(s.timestamp);
-    if (d.getMonth() !== anchor.getMonth() || d.getFullYear() !== anchor.getFullYear()) return;
-    dayCounts[d.getDate() - 1]++;
+    const i = dayDiff(new Date(s.timestamp), anchor);
+    if (i >= 0 && i < numDays) dayCounts[i]++;
   });
   const best = Math.max(0, ...dayCounts);
 
@@ -1769,23 +1822,26 @@ function showModal(opts) {
 
   const bars = document.getElementById('bars');
   const labels = document.getElementById('bar-labels');
-  // Only highlight "today" if the modal is showing the current month; for
-  // an archived month there is no "today" column to mark.
-  const todayDay = isCurrentMonth ? now.getDate() : -1;
+  // Only highlight "today" if the modal is showing the current period; for
+  // an archived period there is no "today" column to mark.
+  const todayIdx = isCurrentPeriod ? dayDiff(now, anchor) : -1;
   const maxBar = Math.max(1, best);
+  // Bar i is the i-th day of the period, so its calendar date walks 22 -> 21.
+  const dateForIdx = (i) =>
+    new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + i);
 
   bars.innerHTML = dayCounts.map((c, i) => {
     const pct = (c / maxBar) * 100;
     const classes = ['bar'];
     if (c === 0) classes.push('empty');
-    if (i + 1 === todayDay) classes.push('today');
-    return '<div class="' + classes.join(' ') + '" title="Day ' + (i+1) + ': ' + c + '" style="height: ' + Math.max(2, pct) + '%"></div>';
+    if (i === todayIdx) classes.push('today');
+    const label = dateForIdx(i).toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return '<div class="' + classes.join(' ') + '" title="' + label + ': ' + c + '" style="height: ' + Math.max(2, pct) + '%"></div>';
   }).join('');
 
   labels.innerHTML = dayCounts.map((_, i) => {
-    const day = i + 1;
-    const show = day === 1 || day === todayDay || day % 5 === 0 || day === daysInMonth;
-    return '<div>' + (show ? day : '') + '</div>';
+    const show = i === 0 || i === todayIdx || i % 5 === 0 || i === numDays - 1;
+    return '<div>' + (show ? dateForIdx(i).getDate() : '') + '</div>';
   }).join('');
 
   const list = document.getElementById('sub-list');
@@ -2126,13 +2182,15 @@ function buildLastMonthCounts() {
 }
 
 function renderLastMonthView() {
-  const label = lastMonthLabel(); // e.g. "May 2026"
+  const prevStart = prevFiscalStart();
+  const label = fiscalLabel(prevStart);          // e.g. "August 2026"
+  const range = fiscalRangeLabel(prevStart);     // e.g. "Jul 22 – Aug 21"
 
   // Update labels on the view
   const lblEl = document.getElementById('last-month-stat-label');
   if (lblEl) lblEl.textContent = label + ' total';
   const secEl = document.getElementById('last-month-section-title');
-  if (secEl) secEl.textContent = label + ' — reps by store';
+  if (secEl) secEl.textContent = label + ' (' + range + ') — reps by store';
 
   const archived = submissions.filter(isLastMonth);
 
@@ -2244,7 +2302,7 @@ function openLastMonthStoreDetail(storeName) {
     title: storeShortName(storeName) + ' — ' + lastMonthLabel(),
     subtitle: (STORE_TO_DISTRICT[storeName] || {}).name || 'Unassigned',
     subs: subs,
-    monthAnchor: lastMonthAnchor()
+    periodStart: prevFiscalStart()
   });
 }
 
@@ -2258,7 +2316,7 @@ function openLastMonthRepDetail(repName, storeName) {
     title: repName + ' — ' + lastMonthLabel(),
     subtitle: storeShortName(storeName),
     subs: subs,
-    monthAnchor: lastMonthAnchor()
+    periodStart: prevFiscalStart()
   });
 }
 
