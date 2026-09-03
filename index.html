@@ -4,12 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>T-Sheet Submissions</title>
-<!-- Perf (2026-09-02): `defer` so the 316 KB SheetJS download no longer blocks
-     parsing (a hung cdnjs used to leave this page blank); the feed fetches now
-     start in parallel with it. fetchSalesReportTraffic() waits for
-     DOMContentLoaded before touching XLSX, so the first render still carries
-     the traffic column exactly as before. -->
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -125,6 +120,42 @@
   }
   .status-dot.loading { background: var(--warning); }
   .status-dot.error { background: var(--error); }
+
+  /* Roster provenance. A dashboard quietly showing a stale org chart is the
+     exact failure the Admin Panel Directory is meant to prevent, so when the
+     live directory cannot be read the page has to say so out loud. */
+  .roster-note {
+    color: var(--warning);
+    border: 1px solid rgba(251, 191, 36, 0.4);
+    border-radius: 10px;
+    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: help;
+  }
+
+  .dir-issues {
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    background: rgba(251, 191, 36, 0.06);
+    border-radius: 8px;
+    padding: 10px 13px;
+    margin-bottom: 14px;
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+  .dir-issues-head {
+    color: var(--warning);
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 5px;
+  }
+  .dir-issues ul { list-style: none; }
+  .dir-issues b { color: var(--text); font-weight: 600; }
+  .dir-issues a { color: var(--text-dim); }
 
   .tabs {
     display: flex;
@@ -351,6 +382,80 @@
     font-style: italic;
     border-top: 1px solid var(--border);
   }
+
+  /* ============================================================
+     RAPID-FIRE FLAGS
+     Red is deliberately NOT the only signal. Jeff screenshots these panels on
+     his phone and pastes them into district group chats, where they get
+     re-compressed and read on every kind of screen, so every red name is also
+     tagged with a warning badge that survives a black-and-white screenshot and a
+     colourblind reader. The badge carries its own title= with the real clock
+     times, because "why is this red" is the first question he gets asked.
+     ============================================================ */
+  .flagged { color: var(--error); font-weight: 600; }
+
+  .flag-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    border: 1px solid rgba(239, 68, 68, 0.45);
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.6;
+    color: var(--error);
+    white-space: nowrap;
+    vertical-align: middle;
+    flex-shrink: 0;
+    cursor: help;
+  }
+
+  /* Bare glyph for the places that have no room for a pill: the sticky store
+     column in the daily grid clips overflow, so the mark goes BEFORE the name
+     where the ellipsis can never eat it. */
+  .flag-mark { color: var(--error); font-weight: 700; cursor: help; }
+
+  .district-flag-note {
+    color: var(--error);
+    font-weight: 600;
+    margin-left: 8px;
+    cursor: help;
+  }
+
+  .lb-name-row { display: flex; align-items: center; min-width: 0; }
+
+  .flag-legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin: -4px 0 14px;
+  }
+
+  .flag-panel {
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.06);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 18px;
+  }
+
+  .flag-panel-head {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--error);
+    margin-bottom: 8px;
+  }
+
+  .flag-cluster-list { list-style: none; }
+  .flag-cluster-list li { font-size: 13px; padding: 3px 0; line-height: 1.5; }
+  .flag-cluster-times { font-variant-numeric: tabular-nums; }
+  .flag-panel-note { font-size: 11px; color: var(--text-dim); margin-top: 9px; }
+
+  .sub-item.flagged-row .sub-customer { color: var(--error); font-weight: 600; }
 
   /* LEADERBOARD */
   .leaderboard {
@@ -750,6 +855,7 @@
       <div class="status">
         <span class="status-dot" id="status-dot"></span>
         <span id="status-text">Live</span>
+        <span class="roster-note hidden" id="roster-note"></span>
       </div>
     </div>
     <div class="tabs">
@@ -804,6 +910,20 @@
     placeholder="Search store or rep name..."
     autocomplete="off"
   >
+
+  <!-- Directory problems Jeff can only fix in the Admin Panel: a store pointed at
+       a district that does not exist, a store with no district at all, or a store
+       filing t-sheets that no district rolls up. Before this, all three simply
+       failed to be counted anywhere and nobody could tell. -->
+  <div class="dir-issues hidden" id="directory-issues"></div>
+
+  <!-- Only rendered on days that actually carry a flag (render() toggles .hidden),
+       so the explanation shows up the moment the first red name does and stays
+       out of the way every other day. -->
+  <div class="flag-legend hidden" id="flag-legend">
+    <span class="flag-badge">&#9888; 2 in 5 min</span>
+    <span>Red name = rapid-fire: the same employee filed two or more t-sheets within five minutes today. Hover a badge for the exact times.</span>
+  </div>
 
   <div class="view" id="view-overview">
     <div class="section-title">Districts</div>
@@ -916,6 +1036,10 @@
         </div>
       </div>
 
+      <!-- Rapid-fire evidence goes ABOVE the histogram: it is the thing Jeff
+           opens the modal to act on. Empty string on every unflagged modal. -->
+      <div id="modal-flags"></div>
+
       <div class="modal-subhead">Daily pace this month</div>
       <div class="bars" id="bars"></div>
       <div class="bar-labels" id="bar-labels"></div>
@@ -1005,7 +1129,22 @@ function normalizeStoreName(raw) {
 let trafficByStore = {}; // { 'Storename Xfinity Store': mtdCMTDTraffic }
 let internetsByStore = {}; // { 'Storename Xfinity Store': mtdHSISold }
 
-const DISTRICTS = [
+/* ============================================================
+   DISTRICT ROSTER
+   Jeff moves stores between districts from the Admin Panel Directory
+   (https://blufoxmobile.github.io/Admin-Panel-Directory/), which publishes
+   store-directory.json. The roster below is the FALLBACK ONLY - it is what the
+   page runs on until that file lands, and what it keeps running on if the file
+   is unreachable or malformed. The live file wins, including the district
+   NAMES ("North Side", not "Chicago North") and the DM names, so renaming a
+   district or reassigning a store is something Jeff does in the Admin Panel
+   rather than something that needs this file re-uploaded.
+
+   Keep the fallback in sync-ish, but never treat it as the source of truth:
+   the whole point of the request was that a stale org chart here and a fresh
+   one in the email digest is worse than either being stale alone.
+   ============================================================ */
+const FALLBACK_DISTRICTS = [
   {
     key: 'north-side',
     name: 'Chicago North',
@@ -1070,8 +1209,120 @@ const DISTRICTS = [
   }
 ];
 
+// The roster the page is actually rendering. Reassigned in place by
+// applyStoreDirectory(); every reader below dereferences it at call time, so a
+// swap mid-session is picked up by the next render() with no other wiring.
+let DISTRICTS = FALLBACK_DISTRICTS;
+
+// 'fallback' until the live directory has been read successfully at least once.
+// Once it has, a later failed poll does NOT revert the roster - flipping the org
+// chart back and forth under Jeff every 30s would be worse than holding the last
+// good copy.
+let districtsSource = 'fallback';
+let directoryIssues = [];   // [{ store, problem }] - things only Jeff can fix
+let directoryUpdatedAt = '';
+
+const DIRECTORY_URL = 'https://blufoxmobile.github.io/Daily-Sales-Report/data/store-directory.json';
+// Hard ceiling on how long the roster may hold up a paint. GitHub Pages is fast
+// and CORS-open, but "fast" is not a guarantee, and a hung directory request
+// must never leave Jeff looking at a blank dashboard - we draw with the roster
+// we have and the next 30s poll picks up the real one.
+const DIRECTORY_TIMEOUT_MS = 4000;
+const ADMIN_PANEL_URL = 'https://blufoxmobile.github.io/Admin-Panel-Directory/';
+
+// STORE_TO_DISTRICT stays the same object for the life of the page (plenty of
+// call sites captured it) - it is emptied and refilled, never replaced.
 const STORE_TO_DISTRICT = {};
-DISTRICTS.forEach(d => d.stores.forEach(s => STORE_TO_DISTRICT[s] = d));
+function rebuildStoreToDistrict() {
+  Object.keys(STORE_TO_DISTRICT).forEach(k => delete STORE_TO_DISTRICT[k]);
+  DISTRICTS.forEach(d => d.stores.forEach(s => STORE_TO_DISTRICT[s] = d));
+}
+rebuildStoreToDistrict();
+
+// Never throws. Returns null on any failure so the caller can carry on with the
+// roster it already has - the page has to survive a dead directory the same way
+// it already survives a dead traffic feed.
+async function fetchStoreDirectory() {
+  const resp = await fetch(DIRECTORY_URL + '?t=' + Date.now(), { cache: 'no-store' });
+  if (!resp.ok) throw new Error('store directory HTTP ' + resp.status);
+  return resp.json();
+}
+
+/* Build the live roster from store-directory.json.
+   Returns true if it replaced the roster, false if the payload was unusable (in
+   which case whatever is already loaded stays put). Throws nothing. */
+function applyStoreDirectory(dir) {
+  try {
+    if (!dir || !Array.isArray(dir.districts) || !dir.districts.length) return false;
+    if (!dir.storeDistricts || typeof dir.storeDistricts !== 'object') return false;
+
+    // District order comes straight from the file's array order and nothing
+    // re-sorts it, so the Overview does not reshuffle itself between reloads.
+    const byId = new Map();
+    const order = [];
+    dir.districts.forEach(d => {
+      if (!d || !d.id || byId.has(String(d.id))) return;
+      const entry = {
+        key: String(d.id),
+        name: String(d.name || d.id),
+        dm: String(d.dmName || d.dm || ''),   // display name; d.dm is the email
+        dmEmail: String(d.dm || ''),
+        stores: []
+      };
+      byId.set(entry.key, entry);
+      order.push(entry);
+    });
+    if (!order.length) return false;
+
+    const issues = [];
+    const seen = new Set();
+    Object.keys(dir.storeDistricts).forEach(raw => {
+      // Normalize before using it as a key, exactly like every other source.
+      // A directory row still spelled "Skokie Xfinity Store" would otherwise
+      // create an orphan bucket no district rolls up - this file has been
+      // bitten by that twice already.
+      const name = normalizeStoreName(raw);
+      if (!name || seen.has(name)) return;
+      seen.add(name);
+      const d = byId.get(String(dir.storeDistricts[raw]));
+      if (!d) {
+        issues.push({ store: name, problem: 'points at unknown district "' +
+                      String(dir.storeDistricts[raw] || '(blank)') + '"' });
+        return;
+      }
+      d.stores.push(name);
+    });
+
+    // A store listed in `stores` but absent from `storeDistricts` has no home.
+    if (Array.isArray(dir.stores)) {
+      dir.stores.forEach(raw => {
+        const name = normalizeStoreName(raw);
+        if (!name || seen.has(name)) return;
+        seen.add(name);
+        issues.push({ store: name, problem: 'is not assigned to any district' });
+      });
+    }
+
+    // A directory that maps nothing is malformed, not "an empty company".
+    if (!order.some(d => d.stores.length)) return false;
+
+    order.forEach(d => d.stores.sort());   // deterministic within a district
+
+    DISTRICTS = order;
+    // The fallback short-name index is DERIVED from the roster, so a roster swap
+    // invalidates it. Leaving it cached would keep normalizing a newly-added
+    // store against yesterday's list.
+    _fallbackStoreIndex = null;
+    rebuildStoreToDistrict();
+    directoryIssues = issues;
+    directoryUpdatedAt = String(dir.updatedAt || '');
+    districtsSource = 'directory';
+    return true;
+  } catch (err) {
+    console.warn('store directory unusable, keeping current roster', err);
+    return false;
+  }
+}
 
 let submissions = [];
 let quoteSubmissions = [];
@@ -1129,8 +1380,21 @@ async function fetchData(isManual = false) {
   const trafficReq = fetchSalesReportTraffic()
     .catch(err => { console.error('traffic fetch failed', err); return {}; });
 
+  // Live district roster, same independence contract as the traffic feed: it
+  // rides along with the poll (so moving a store in the Admin Panel shows up
+  // within 30s) and a failure resolves to null instead of rejecting, so it can
+  // never take the t-sheets down with it.
+  const directoryReq = Promise.race([
+    fetchStoreDirectory().catch(err => { console.warn('store directory fetch failed', err); return null; }),
+    new Promise(resolve => setTimeout(() => resolve(null), DIRECTORY_TIMEOUT_MS))
+  ]);
+
   try {
-    const [data, quoteData, trafficData] = await Promise.all([tSheetReq, quoteReq, trafficReq]);
+    const [data, quoteData, trafficData, dirData] = await Promise.all([tSheetReq, quoteReq, trafficReq, directoryReq]);
+
+    // Apply the roster BEFORE anything buckets a submission — buildCounts(),
+    // renderDailyGrid() and STORE_TO_DISTRICT all read DISTRICTS at call time.
+    if (dirData) applyStoreDirectory(dirData);
     if (!data.success) throw new Error(data.error || 'Unknown error');
 
     submissions = data.submissions || [];
@@ -1169,13 +1433,6 @@ async function fetchData(isManual = false) {
 }
 
 async function fetchSalesReportTraffic() {
-  // Perf (2026-09-02): SheetJS is deferred (see <head>). Deferred scripts run
-  // while readyState is already 'interactive' and DOMContentLoaded fires after
-  // they finish, so wait for DOMContentLoaded (or load, if the CDN script
-  // failed and DOMContentLoaded already went by) before the check below.
-  if (typeof XLSX === 'undefined' && document.readyState !== 'complete') {
-    await new Promise(r => { document.addEventListener('DOMContentLoaded', r, { once: true }); window.addEventListener('load', r, { once: true }); });
-  }
   if (typeof XLSX === 'undefined') { console.warn('SheetJS not loaded'); return {}; }
   const resp = await fetch(SALES_REPORT_URL + '?t=' + Date.now());
   if (!resp.ok) throw new Error('Sales report HTTP ' + resp.status);
@@ -1371,6 +1628,243 @@ function buildCounts() {
   return { stores, districts };
 }
 
+/* ============================================================
+   RAPID-FIRE SUBMISSION FLAGGING
+   A "cluster" is the SAME rep at the SAME store filing 2+ t-sheets within five
+   minutes of each other. Jeff uses it to spot someone sitting in the back
+   filling out t-sheets in a batch instead of after real customer conversations.
+
+   Choices below are deliberate; do not "tidy" them:
+   - SAME REP ONLY. Two different reps at one store a minute apart is normal
+     (a rush), not a flag. Jeff was asked directly and picked this.
+   - Reps are keyed by store + name, never name alone. Two stores can carry the
+     same first/last name, and merging them would invent clusters that never
+     happened.
+   - A blank rep name is an aggregation bucket ("(unknown)"), not a person, so
+     it can never be flagged - otherwise every store with sloppy form entry
+     would light up red permanently and Jeff would learn to ignore the colour.
+   - A gap of exactly 0 ms (two rows with an identical timestamp) is INSIDE the
+     window. Duplicate-looking timestamps are exactly the behaviour being hunted.
+   ============================================================ */
+const RAPID_WINDOW_MS = 5 * 60 * 1000;
+
+// Pure function over rows: no DOM, no globals beyond the normalizer, so the
+// email digest can run the identical rule server-side and never disagree with
+// what the dashboard paints red.
+function flagsForDay(subs, dayKey) {
+  const groups = new Map();
+  for (let i = 0; i < subs.length; i++) {
+    const s = subs[i];
+    if (submissionDayKey(s) !== dayKey) continue;
+    const rep = String(s.rep_name == null ? '' : s.rep_name).trim();
+    if (!rep) continue;                       // bucket, not a person
+    const t = new Date(s.timestamp);
+    if (isNaN(t.getTime())) continue;         // unparseable rows can't be timed
+    const store = normalizeStoreName(s.store);
+    const key = store + '||' + rep;
+    let g = groups.get(key);
+    if (!g) { g = { store: store, rep: rep, times: [] }; groups.set(key, g); }
+    g.times.push(t);
+  }
+
+  const stores = {};
+  groups.forEach(g => {
+    const times = g.times.sort((a, b) => a - b);
+    const n = times.length;
+    if (n < 2) return;
+
+    // Mark BOTH sides of every too-short gap. Marking pairs rather than runs is
+    // what makes three submissions three minutes apart chain into one cluster
+    // instead of two overlapping pairs.
+    const hot = new Array(n).fill(false);
+    for (let i = 1; i < n; i++) {
+      if (times[i] - times[i - 1] <= RAPID_WINDOW_MS) { hot[i] = true; hot[i - 1] = true; }
+    }
+
+    // Group the flagged rows into bursts. A row joins the burst before it only
+    // when it is ALSO within the window of that row; otherwise it opens a new
+    // one. Reading this as "any run of consecutive flagged rows" instead would
+    // fuse a rep's 11am burst and his 4pm burst into one cluster whenever he
+    // filed nothing calm in between, and the modal would report "7 t-sheets in
+    // 5 hr 12 min" - true of the run, nonsense as evidence. Which rows are
+    // flagged is identical either way; only the grouping differs, so the red
+    // never moves.
+    const clusters = [];
+    let run = null;
+    for (let i = 0; i < n; i++) {
+      if (!hot[i]) { run = null; continue; }
+      if (!run || times[i] - times[i - 1] > RAPID_WINDOW_MS) { run = []; clusters.push(run); }
+      run.push(times[i]);
+    }
+    if (!clusters.length) return;
+
+    let flaggedCount = 0;
+    for (let i = 0; i < n; i++) if (hot[i]) flaggedCount++;
+
+    if (!stores[g.store]) stores[g.store] = {};
+    stores[g.store][g.rep] = {
+      flaggedCount: flaggedCount,
+      clusterCount: clusters.length,
+      clusters: clusters
+    };
+  });
+
+  return stores;
+}
+
+// Everything the renderers need, precomputed. Built ONCE per render() beside
+// buildCounts(); the renderers only ever do hash lookups. The file has a scar
+// here - an earlier version recomputed a derived figure inside the row loop and
+// the 24,000-row feed turned the 30s poll into a visible freeze - so nothing
+// below may walk the submission list again.
+let rapidFlags = { stores: {}, districts: {}, any: false };
+
+function buildRapidFlags(todaySubs) {
+  const byStore = flagsForDay(todaySubs, todayKey());
+  const index = { stores: {}, districts: {}, any: false };
+
+  Object.keys(byStore).forEach(storeName => {
+    const reps = byStore[storeName];
+    const repNames = Object.keys(reps);
+    if (!repNames.length) return;
+
+    // rep|epochMs of every submission that sits inside a cluster, so the modal's
+    // recent-submissions list can mark the exact offending rows without
+    // re-running the window check per row.
+    const flaggedTimes = new Set();
+    repNames.forEach(r => reps[r].clusters.forEach(c => c.forEach(t => {
+      flaggedTimes.add(r + '|' + t.getTime());
+    })));
+
+    index.stores[storeName] = { reps: reps, repCount: repNames.length, flaggedTimes: flaggedTimes };
+    index.any = true;
+
+    // Districts never turn red themselves - a district is a manager, not a
+    // person filing t-sheets - but the header carries the count so Jeff knows
+    // which one to open.
+    const d = STORE_TO_DISTRICT[storeName];
+    if (d) index.districts[d.key] = (index.districts[d.key] || 0) + repNames.length;
+  });
+
+  return index;
+}
+
+function storeFlag(storeName) { return rapidFlags.stores[storeName] || null; }
+
+function repFlag(storeName, repName) {
+  const st = rapidFlags.stores[storeName];
+  return (st && st.reps[repName]) || null;
+}
+
+// "2:14:03 PM" - seconds matter here; two t-sheets in the same minute are the
+// whole point, and a minute-precision label would hide them.
+function fmtClockTime(d) {
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+}
+
+function clusterSpanText(c) {
+  const secs = Math.round((c[c.length - 1] - c[0]) / 1000);
+  if (secs < 60) return secs + ' sec';
+  const m = Math.floor(secs / 60), s = secs % 60;
+  return m + ' min' + (s ? ' ' + s + ' sec' : '');
+}
+
+function clusterTimesText(f) {
+  return f.clusters.map(c => c.map(fmtClockTime).join(', ')).join('  |  ');
+}
+
+function repBadgeFor(storeName, repName) {
+  const f = repFlag(storeName, repName);
+  if (!f) return '';
+  const biggest = f.clusters.reduce((m, c) => Math.max(m, c.length), 0);
+  const title = f.flaggedCount + ' t-sheets in ' +
+                f.clusterCount + ' burst' + (f.clusterCount === 1 ? '' : 's') +
+                ' today - ' + clusterTimesText(f);
+  return '<span class="flag-badge" title="' + htmlEscape(title) + '">\u26a0 ' +
+         biggest + ' in 5 min</span>';
+}
+
+function storeBadgeFor(storeName) {
+  const sf = storeFlag(storeName);
+  if (!sf) return '';
+  const title = Object.keys(sf.reps).sort().map(r =>
+    r + ': ' + clusterTimesText(sf.reps[r])
+  ).join('  |  ');
+  return '<span class="flag-badge" title="' + htmlEscape(title) + '">\u26a0 ' +
+         sf.repCount + (sf.repCount === 1 ? ' rep' : ' reps') + '</span>';
+}
+
+function repNameInnerHtml(storeName, repName) {
+  const safe = htmlEscape(repName);
+  return repFlag(storeName, repName) ? '<span class="flagged">' + safe + '</span>' : safe;
+}
+
+function storeNameInnerHtml(storeName) {
+  const safe = htmlEscape(storeShortName(storeName));
+  return storeFlag(storeName) ? '<span class="flagged">' + safe + '</span>' : safe;
+}
+
+function storeNameHtml(storeName) {
+  return storeNameInnerHtml(storeName) + storeBadgeFor(storeName);
+}
+
+// Daily grid only. That cell is sticky with overflow:hidden, so the mark has to
+// lead the name or the ellipsis swallows it.
+function storeNameCompactHtml(storeName) {
+  const sf = storeFlag(storeName);
+  if (!sf) return htmlEscape(storeShortName(storeName));
+  const title = Object.keys(sf.reps).sort().map(r =>
+    r + ': ' + clusterTimesText(sf.reps[r])
+  ).join('  |  ');
+  return '<span class="flag-mark" title="' + htmlEscape(title) + '">\u26a0</span> ' +
+         '<span class="flagged">' + htmlEscape(storeShortName(storeName)) + '</span>';
+}
+
+function districtFlagNoteHtml(key) {
+  const n = rapidFlags.districts[key] || 0;
+  if (!n) return '';
+  return '<span class="district-flag-note" title="Same employee, 2+ t-sheets inside five minutes">' +
+         '\u26a0 ' + n + ' flagged rep' + (n === 1 ? '' : 's') + ' today</span>';
+}
+
+// True when this exact row sits inside a cluster - used to mark the individual
+// offending lines in the modal's recent-submissions list.
+function isFlaggedSubmission(s) {
+  const st = rapidFlags.stores[normalizeStoreName(s.store)];
+  if (!st) return false;
+  const rep = String(s.rep_name == null ? '' : s.rep_name).trim();
+  if (!rep) return false;
+  const t = new Date(s.timestamp).getTime();
+  return st.flaggedTimes.has(rep + '|' + t);
+}
+
+// The evidence block. Jeff acts on the timestamps, so they are spelled out to
+// the second rather than hidden behind a tooltip.
+function modalFlagsHtml(opts) {
+  if (!opts || !opts.flagStore) return '';
+  const sf = storeFlag(opts.flagStore);
+  if (!sf) return '';
+  const names = (opts.flagRep ? [opts.flagRep] : Object.keys(sf.reps).sort())
+    .filter(n => sf.reps[n]);
+  if (!names.length) return '';
+
+  const rows = [];
+  names.forEach(name => {
+    sf.reps[name].clusters.forEach(c => {
+      rows.push('<li><span class="flagged">' + htmlEscape(name) + '</span> \u2014 ' +
+                c.length + ' t-sheets in ' + clusterSpanText(c) + ': ' +
+                '<span class="flag-cluster-times">' + c.map(fmtClockTime).join(', ') +
+                '</span></li>');
+    });
+  });
+
+  return '<div class="flag-panel">' +
+           '<div class="flag-panel-head">\u26a0 Rapid-fire submissions today</div>' +
+           '<ul class="flag-cluster-list">' + rows.join('') + '</ul>' +
+           '<div class="flag-panel-note">Same employee, two or more t-sheets inside five minutes.</div>' +
+         '</div>';
+}
+
 // --- Keeping opened sections open -------------------------------------------
 // The dashboard re-renders itself on every 30s poll (and on search), which
 // replaces the whole breakdown DOM. Expanded districts/stores are tracked only
@@ -1443,6 +1937,14 @@ function render() {
 
   const { stores, districts } = buildCounts();
 
+  // Computed ONCE per render, beside buildCounts(), over today's rows only.
+  // Every renderer below reads this index; none of them re-scan submissions.
+  rapidFlags = buildRapidFlags(todaySubs);
+  const legendEl = document.getElementById('flag-legend');
+  if (legendEl) legendEl.classList.toggle('hidden', !rapidFlags.any);
+
+  renderDirectoryNotice(stores);
+
   const totalTraffic = districts.reduce((acc, d) => acc + (d.traffic || 0), 0);
   const trafEl = document.getElementById('stat-traffic');
   const tcrEl = document.getElementById('stat-tcr');
@@ -1456,6 +1958,57 @@ function render() {
   renderLastMonthView();
 
   restoreExpanded(openSections);
+}
+
+/* Surface every way the roster can be wrong, because all of them used to fail
+   silently: an unreachable directory (stale org chart), a store pointed at a
+   district id that does not exist, a store with no district, and a store filing
+   t-sheets that no district rolls up. That last one is invisible by
+   construction - buildCounts() happily makes a bucket for it and no district
+   ever adds it up - so it has to be named here or the numbers just quietly
+   don't add up. All of these are fixed in the Admin Panel, not in this file. */
+function renderDirectoryNotice(stores) {
+  const noteEl = document.getElementById('roster-note');
+  const panel = document.getElementById('directory-issues');
+  const onFallback = districtsSource !== 'directory';
+
+  if (noteEl) {
+    noteEl.classList.toggle('hidden', !onFallback);
+    if (onFallback) {
+      noteEl.textContent = '\u26a0 Fallback roster';
+      noteEl.title = 'The Admin Panel store directory could not be read, so district ' +
+                     'assignments come from this file\u2019s built-in copy and may be stale.';
+    }
+  }
+
+  if (!panel) return;
+
+  // Stores that filed t-sheets this period but sit in no district. Read off the
+  // already-built counts map, so this costs a key walk, not another feed scan.
+  const unrouted = Object.keys(stores)
+    .filter(n => !STORE_TO_DISTRICT[n] && stores[n].mtd > 0)
+    .sort();
+
+  const lines = [];
+  if (onFallback) {
+    lines.push('<li><b>Store directory unavailable.</b> District assignments and names come ' +
+               'from this file\u2019s built-in fallback and may be stale \u2014 ' +
+               '<a href="' + ADMIN_PANEL_URL + '" target="_blank" rel="noopener">Admin Panel</a></li>');
+  }
+  directoryIssues.forEach(i => {
+    lines.push('<li><b>' + htmlEscape(storeShortName(i.store)) + '</b> ' + htmlEscape(i.problem) + '</li>');
+  });
+  unrouted.forEach(n => {
+    lines.push('<li><b>' + htmlEscape(storeShortName(n)) + '</b> has ' + stores[n].mtd +
+               ' submission' + (stores[n].mtd === 1 ? '' : 's') +
+               ' this period but belongs to no district \u2014 not counted in any district total</li>');
+  });
+
+  panel.classList.toggle('hidden', lines.length === 0);
+  if (!lines.length) { panel.innerHTML = ''; return; }
+  panel.innerHTML =
+    '<div class="dir-issues-head">\u26a0 Directory needs attention</div>' +
+    '<ul>' + lines.join('') + '</ul>';
 }
 
 function matchesSearch(text) {
@@ -1472,7 +2025,7 @@ function renderOverview(districts, stores) {
       <div class="district-header" onclick="toggleDistrict('${d.key}')">
         <div class="header-info">
           <div class="item-name">${d.name}</div>
-          <div class="item-meta">${d.dm} · ${d.stores.length} stores</div>
+          <div class="item-meta">${d.dm} · ${d.stores.length} stores${districtFlagNoteHtml(d.key)}</div>
         </div>
         <div class="counts">
           <div class="count">
@@ -1500,7 +2053,7 @@ function renderOverview(districts, stores) {
           return `
             <div class="store">
               <div class="store-header" onclick="event.stopPropagation(); openStoreDetail('${escapeAttr(storeName)}')">
-                <div class="store-name">${storeShortName(storeName)}</div>
+                <div class="store-name">${storeNameHtml(storeName)}</div>
                 <div class="counts">
                   <div class="count">
                     <div class="count-value ${sc.today ? '' : 'zero'}">${sc.today}</div>
@@ -1528,6 +2081,10 @@ function renderOverview(districts, stores) {
   `).join('');
 }
 
+// UNREACHABLE as of this writing: nothing calls renderDistrictView() and there is
+// no #district-breakdown element in the body. The Districts breakdown Jeff
+// actually sees is renderOverview(). Kept working and kept in step with the rest
+// of the file, but editing it changes nothing on screen - fix renderOverview().
 function renderDistrictView(districts, stores) {
   const el = document.getElementById('district-breakdown');
   el.innerHTML = districts.map(d => `
@@ -1535,7 +2092,7 @@ function renderDistrictView(districts, stores) {
       <div class="district-header">
         <div class="header-info">
           <div class="item-name">${d.name}</div>
-          <div class="item-meta">${d.dm}</div>
+          <div class="item-meta">${d.dm}${districtFlagNoteHtml(d.key)}</div>
         </div>
         <div class="counts">
           <div class="count">
@@ -1554,7 +2111,7 @@ function renderDistrictView(districts, stores) {
           return `
             <div class="store">
               <div class="store-header" onclick="openStoreDetail('${escapeAttr(storeName)}')">
-                <div class="store-name">${storeShortName(storeName)}</div>
+                <div class="store-name">${storeNameHtml(storeName)}</div>
                 <div class="counts">
                   <div class="count">
                     <div class="count-value ${sc.today ? '' : 'zero'}">${sc.today}</div>
@@ -1574,6 +2131,9 @@ function renderDistrictView(districts, stores) {
   `).join('');
 }
 
+// UNREACHABLE as of this writing: nothing calls renderStoreLeaderboard() and
+// there is no #store-leaderboard element in the body. Same warning as
+// renderDistrictView() above - edits here have no visible effect.
 function renderStoreLeaderboard(stores) {
   const el = document.getElementById('store-leaderboard');
   const sorted = Object.entries(stores)
@@ -1590,7 +2150,7 @@ function renderStoreLeaderboard(stores) {
     <div class="lb-row" onclick="openStoreDetail('${escapeAttr(s.name)}')">
       <div class="lb-rank">${i + 1}</div>
       <div class="lb-name-wrap">
-        <div class="lb-name">${storeShortName(s.name)}</div>
+        <div class="lb-name-row"><div class="lb-name">${storeNameInnerHtml(s.name)}</div>${storeBadgeFor(s.name)}</div>
         <div class="lb-sub">${s.district ? s.district.name : 'Unassigned'}</div>
       </div>
       <div class="lb-count-small">${s.today}</div>
@@ -1615,7 +2175,7 @@ function renderRepView(districts, stores) {
       return `
         <div class="store" data-store="${escapeAttr(storeName)}">
           <div class="store-header" onclick="toggleStore(this)">
-            <div class="store-name">${storeShortName(storeName)}</div>
+            <div class="store-name">${storeNameHtml(storeName)}</div>
             <div class="counts">
               <div class="count">
                 <div class="count-value ${sc.today ? '' : 'zero'}">${sc.today}</div>
@@ -1633,7 +2193,7 @@ function renderRepView(districts, stores) {
               ? '<div class="store-empty">No submissions yet this month</div>'
               : reps.map(r => `
                   <div class="rep-row" onclick="openRepDetail('${escapeAttr(r.name)}','${escapeAttr(storeName)}')">
-                    <div class="rep-name">${r.name}</div>
+                    <div class="rep-name">${repNameInnerHtml(storeName, r.name)}</div>${repBadgeFor(storeName, r.name)}
                     <div class="counts">
                       <div class="count">
                         <div class="count-value ${r.today ? '' : 'zero'}">${r.today}</div>
@@ -1659,7 +2219,7 @@ function renderRepView(districts, stores) {
         <div class="district-header">
           <div class="header-info">
             <div class="item-name">${d.name}</div>
-            <div class="item-meta">${d.dm}</div>
+            <div class="item-meta">${d.dm}${districtFlagNoteHtml(d.key)}</div>
           </div>
           <div class="counts">
             <div class="count">
@@ -1725,7 +2285,7 @@ function renderDailyGrid(mtdSubs) {
   // Build body — group by district
   let tbody = '';
   DISTRICTS.forEach(dist => {
-    tbody += `<tr class="district-head"><td colspan="${numDays + 2}">${dist.name}</td></tr>`;
+    tbody += `<tr class="district-head"><td colspan="${numDays + 2}">${dist.name}${districtFlagNoteHtml(dist.key)}</td></tr>`;
     dist.stores.forEach(storeName => {
       const row = counts[storeName];
       let rowTotal = 0;
@@ -1738,7 +2298,7 @@ function renderDailyGrid(mtdSubs) {
         if (i === todayIdx) classes.push('cell-today');
         cells += `<td class="${classes.join(' ')}">${v || ''}</td>`;
       }
-      tbody += `<tr class="store-row"><td class="col-store" title="${storeName}">${storeShortName(storeName)}</td>${cells}<td class="col-total">${rowTotal}</td></tr>`;
+      tbody += `<tr class="store-row"><td class="col-store" title="${storeName}">${storeNameCompactHtml(storeName)}</td>${cells}<td class="col-total">${rowTotal}</td></tr>`;
     });
   });
 
@@ -1788,8 +2348,10 @@ function openStoreDetail(storeName) {
   const subs = submissions.filter(s => s.store === storeName && isThisMonth(s));
   showModal({
     title: storeShortName(storeName),
+    titleHtml: storeNameHtml(storeName),
     subtitle: (STORE_TO_DISTRICT[storeName] || {}).name || 'Unassigned',
-    subs: subs
+    subs: subs,
+    flagStore: storeName
   });
 }
 
@@ -1801,14 +2363,24 @@ function openRepDetail(repName, storeName) {
   );
   showModal({
     title: repName,
+    titleHtml: repNameInnerHtml(storeName, repName) + repBadgeFor(storeName, repName),
     subtitle: storeShortName(storeName),
-    subs: subs
+    subs: subs,
+    flagStore: storeName,
+    flagRep: repName
   });
 }
 
 function showModal(opts) {
-  document.getElementById('modal-title').textContent = opts.title;
+  // The title carries the red name + badge for a flagged store/rep, so it has to
+  // be innerHTML. Everything interpolated into it is escaped at the source.
+  document.getElementById('modal-title').innerHTML = opts.titleHtml || htmlEscape(opts.title);
   document.getElementById('modal-sub').textContent = opts.subtitle;
+
+  // Only the current-period modals pass flagStore, so the Last Month and quote
+  // sheet modals stay clean - "today" has no meaning in an archived period.
+  const flagsEl = document.getElementById('modal-flags');
+  if (flagsEl) flagsEl.innerHTML = modalFlagsHtml(opts);
 
   // Anchor the histogram on the fiscal period (22nd -> 21st) the submissions
   // came from. Defaults to the current period; the Last Month tab passes
@@ -1872,8 +2444,13 @@ function showModal(opts) {
                         ' · ' +
                         d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
         if (!isQuote) {
-          return '<li class="sub-item"><span class="sub-customer">' +
-                 (String(s.rep_name || '').trim() || '(no rep name)') +
+          // Mark the individual rows that make up a cluster, not just the rep -
+          // this list is where Jeff reads off which submissions to question.
+          const hot = isFlaggedSubmission(s);
+          return '<li class="sub-item' + (hot ? ' flagged-row' : '') + '">' +
+                 '<span class="sub-customer">' +
+                 htmlEscape(String(s.rep_name || '').trim() || '(no rep name)') +
+                 (hot ? ' <span class="flag-mark" title="Inside a rapid-fire burst">\u26a0</span>' : '') +
                  '</span><span class="sub-time">' + dateStr + '</span></li>';
         }
         return renderQuoteSubItem(s, dateStr);
