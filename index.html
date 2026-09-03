@@ -4,7 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>T-Sheet Submissions</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Perf (2026-09-02): `defer` so the 316 KB SheetJS download no longer blocks
+     parsing (a hung cdnjs used to leave this page blank); the feed fetches now
+     start in parallel with it. fetchSalesReportTraffic() waits for
+     DOMContentLoaded before touching XLSX, so the first render still carries
+     the traffic column exactly as before. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1433,6 +1438,13 @@ async function fetchData(isManual = false) {
 }
 
 async function fetchSalesReportTraffic() {
+  // Perf (2026-09-02): SheetJS is deferred (see <head>). Deferred scripts run
+  // while readyState is already 'interactive' and DOMContentLoaded fires after
+  // they finish, so wait for DOMContentLoaded (or load, if the CDN script
+  // failed and DOMContentLoaded already went by) before the check below.
+  if (typeof XLSX === 'undefined' && document.readyState !== 'complete') {
+    await new Promise(r => { document.addEventListener('DOMContentLoaded', r, { once: true }); window.addEventListener('load', r, { once: true }); });
+  }
   if (typeof XLSX === 'undefined') { console.warn('SheetJS not loaded'); return {}; }
   const resp = await fetch(SALES_REPORT_URL + '?t=' + Date.now());
   if (!resp.ok) throw new Error('Sales report HTTP ' + resp.status);
