@@ -162,6 +162,53 @@
   .dir-issues b { color: var(--text); font-weight: 600; }
   .dir-issues a { color: var(--text-dim); }
 
+  /* Feed banner (2026-09-03). Before this the ONLY report of a dead t-sheet
+     feed was small grey text in the page footer, sitting under a full set of
+     zeroes - so an intermittent Apps Script 404 read as "nobody submitted
+     anything today" rather than "this page has no data". Amber = showing the
+     pre-aggregated snapshot, red = nothing loaded at all. Retry re-runs the
+     fetch in place; a full reload costs another ~15s and re-downloads ~5 MB. */
+  .feed-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    border-radius: 8px;
+    padding: 10px 13px;
+    margin-bottom: 14px;
+    font-size: 12px;
+    line-height: 1.6;
+    border: 1px solid rgba(251, 191, 36, 0.35);
+    background: rgba(251, 191, 36, 0.06);
+    color: var(--text-dim);
+  }
+  .feed-banner.error {
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(248, 113, 113, 0.07);
+  }
+  .feed-banner-head {
+    color: var(--warning);
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .feed-banner.error .feed-banner-head { color: var(--error); }
+  .feed-banner-msg { flex: 1 1 260px; }
+  .feed-banner b { color: var(--text); font-weight: 600; }
+  .feed-retry {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .feed-retry:hover { border-color: var(--text-dim); }
+  .feed-retry[disabled] { opacity: 0.5; cursor: default; }
+
   .tabs {
     display: flex;
     gap: 0;
@@ -840,7 +887,16 @@
   .daily-table tr.store-row:hover td:not(.col-total) { background: #141414; }
   .daily-table tr.store-row:hover td.col-total { background: #1f1f1f; }
 </style>
-<script src="https://blufoxmobile.github.io/Daily-Sales-Report/store-aliases.js"></script>
+<!-- Perf (2026-09-03): this tag carried no `defer`, so HTML parsing stopped
+     dead here until blufoxmobile.github.io answered. Measured: stalling
+     that one host pushed first paint from 0.29s to 20.2s - twenty seconds of
+     white screen, the same class of blank-page bug the SheetJS `defer` above was
+     added to fix. `defer` preserves execution order and still runs the script
+     before DOMContentLoaded, and normalizeStoreName() already checks
+     window.BLUFOX_STORES at CALL time behind a complete built-in fallback (see
+     FALLBACK_STORE_ALIASES below), so a slow or dead alias host now costs
+     nothing but the fallback normalizer. -->
+<script defer src="https://blufoxmobile.github.io/Daily-Sales-Report/store-aliases.js"></script>
 </head>
 <body>
 
@@ -857,9 +913,15 @@
           <div class="brand-sub" id="page-subtitle">Loading...</div>
         </div>
       </div>
+      <!-- Honesty (2026-09-03): this used to ship as a GREEN dot reading "Live"
+           in the static markup, before a single byte of feed had arrived. The
+           t-sheet feed takes ~15s on a good day, so for those fifteen seconds
+           the page asserted "Live" over six zeroes - and when the feed 404'd
+           (which it does intermittently) it kept asserting it until the catch
+           block ran. Start amber/"Loading" and let the code earn the green. -->
       <div class="status">
-        <span class="status-dot" id="status-dot"></span>
-        <span id="status-text">Live</span>
+        <span class="status-dot loading" id="status-dot"></span>
+        <span id="status-text">Loading…</span>
         <span class="roster-note hidden" id="roster-note"></span>
       </div>
     </div>
@@ -878,27 +940,27 @@
   <div class="stats">
     <div class="stat">
       <div class="stat-label">Today</div>
-      <div class="stat-value" id="stat-today">0</div>
+      <div class="stat-value" id="stat-today">—</div>
       <div class="stat-sub">submissions</div>
     </div>
     <div class="stat">
       <div class="stat-label">Month to date</div>
-      <div class="stat-value" id="stat-mtd">0</div>
+      <div class="stat-value" id="stat-mtd">—</div>
       <div class="stat-sub" id="stat-mtd-sub">submissions</div>
     </div>
     <div class="stat">
       <div class="stat-label">Daily average</div>
-      <div class="stat-value" id="stat-avg">0</div>
+      <div class="stat-value" id="stat-avg">—</div>
       <div class="stat-sub">per business day</div>
     </div>
     <div class="stat">
       <div class="stat-label">Active reps</div>
-      <div class="stat-value" id="stat-reps">0</div>
+      <div class="stat-value" id="stat-reps">—</div>
       <div class="stat-sub">today</div>
     </div>
     <div class="stat">
       <div class="stat-label">Traffic MTD</div>
-      <div class="stat-value" id="stat-traffic">0</div>
+      <div class="stat-value" id="stat-traffic">—</div>
       <div class="stat-sub" id="stat-traffic-sub">fiscal MTD</div>
     </div>
     <div class="stat">
@@ -915,6 +977,11 @@
     placeholder="Search store or rep name..."
     autocomplete="off"
   >
+
+  <!-- State of the t-sheet feed itself, in the one place a DM is already
+       looking. Populated by setFeedBanner(); hidden whenever the live feed is
+       healthy, so a normal day looks exactly like it always has. -->
+  <div class="feed-banner hidden" id="feed-banner"></div>
 
   <!-- Directory problems Jeff can only fix in the Admin Panel: a store pointed at
        a district that does not exist, a store with no district at all, or a store
@@ -952,27 +1019,27 @@
     <div class="stats" style="margin-bottom: 16px;">
       <div class="stat">
         <div class="stat-label">Quote sheets today</div>
-        <div class="stat-value" id="quote-stat-today">0</div>
+        <div class="stat-value" id="quote-stat-today">—</div>
         <div class="stat-sub">submissions</div>
       </div>
       <div class="stat">
         <div class="stat-label">Quote sheets MTD</div>
-        <div class="stat-value" id="quote-stat-mtd">0</div>
+        <div class="stat-value" id="quote-stat-mtd">—</div>
         <div class="stat-sub">submissions</div>
       </div>
       <div class="stat">
         <div class="stat-label">Signed up MTD</div>
-        <div class="stat-value" id="quote-stat-signed">0</div>
+        <div class="stat-value" id="quote-stat-signed">—</div>
         <div class="stat-sub">outcome = signed up</div>
       </div>
       <div class="stat">
         <div class="stat-label">Active reps</div>
-        <div class="stat-value" id="quote-stat-reps">0</div>
+        <div class="stat-value" id="quote-stat-reps">—</div>
         <div class="stat-sub">today</div>
       </div>
       <div class="stat">
         <div class="stat-label">Internets MTD</div>
-        <div class="stat-value" id="quote-stat-internets">0</div>
+        <div class="stat-value" id="quote-stat-internets">—</div>
         <div class="stat-sub">HSI sold</div>
       </div>
       <div class="stat">
@@ -989,17 +1056,17 @@
     <div class="stats" style="margin-bottom: 16px;">
       <div class="stat">
         <div class="stat-label" id="last-month-stat-label">Last month total</div>
-        <div class="stat-value" id="last-month-stat-total">0</div>
+        <div class="stat-value" id="last-month-stat-total">—</div>
         <div class="stat-sub">T-Sheet submissions</div>
       </div>
       <div class="stat">
         <div class="stat-label">Active reps</div>
-        <div class="stat-value" id="last-month-stat-reps">0</div>
+        <div class="stat-value" id="last-month-stat-reps">—</div>
         <div class="stat-sub">submitted last month</div>
       </div>
       <div class="stat">
         <div class="stat-label">Best day</div>
-        <div class="stat-value" id="last-month-stat-best">0</div>
+        <div class="stat-value" id="last-month-stat-best">—</div>
         <div class="stat-sub">single-day high</div>
       </div>
     </div>
@@ -1067,6 +1134,97 @@ const QUOTE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxEehuxYvy1HD6
 /* MTD Fiscal Traffic source — pulled from Daily Sales Report xlsx */
 const SALES_REPORT_URL = 'https://raw.githubusercontent.com/BlufoxMobile/Daily-Sales-Report/main/data/Sales%20Report.xlsx';
 const SALES_REPORT_RSD = 'Bilbrey'; // Filter Excel rows by RSD name substring
+
+/* Pre-aggregated snapshot written by the nightly/hourly digest job. ~11 KB and
+   ~0.3s for both files, against ~2.3 MB and ~15s for the live t-sheet feed, so
+   it is what paints the first real numbers on the page. It is NOT a substitute
+   for the feed: it carries per-store and per-rep TOTALS only, no submission
+   rows, so the Daily grid and every modal still wait for the live feed. Whenever
+   it is on screen the page says so, with the snapshot's own timestamp - see
+   setFeedBanner(). Hosted next to store-directory.json in the Daily-Sales-Report
+   repo; raw.githubusercontent serves it with access-control-allow-origin: *. */
+const SNAPSHOT_COUNTS_URL = 'https://raw.githubusercontent.com/BlufoxMobile/Daily-Sales-Report/main/data/tsheet-counts.json';
+const SNAPSHOT_FLAGS_URL  = 'https://raw.githubusercontent.com/BlufoxMobile/Daily-Sales-Report/main/data/tsheet-flags.json';
+
+/* Storage shim (2026-09-03). Nothing in this file touched localStorage when the
+   shim was added - that was verified, not assumed - but the sibling Internet
+   Quote Sheet half-died inside the cookcountycooks.com iframe when an unguarded
+   localStorage.getItem threw "Access is denied for this document." mid-setup and
+   every line after it never ran. Third-party storage is blocked in that iframe,
+   on locked-down store tablets and in private windows, and the accessor THROWS
+   rather than returning null. So: this is the only door to storage in this file,
+   it can never throw, and it falls back to an in-memory map so callers behave
+   identically when storage is unavailable. Any future storage use goes through
+   here. */
+const safeStorage = (function () {
+  const mem = new Map();
+  let backing = null;
+  try {
+    const s = window.localStorage;      // the throwing access, isolated
+    s.setItem('__tss_probe', '1');       // Safari private mode throws on WRITE, not read
+    s.removeItem('__tss_probe');
+    backing = s;
+  } catch (err) { backing = null; }
+  return {
+    available: !!backing,
+    get(key) {
+      try { return backing ? backing.getItem(key) : (mem.has(key) ? mem.get(key) : null); }
+      catch (err) { return mem.has(key) ? mem.get(key) : null; }
+    },
+    set(key, val) {
+      try { if (backing) { backing.setItem(key, val); return; } } catch (err) { /* quota / denied */ }
+      mem.set(key, String(val));
+    }
+  };
+})();
+
+/* Every JSON fetch on this page goes through here.
+   Three real failure modes this file has been bitten by, in order:
+   1. The Apps Script endpoint answers 404 with an HTML error page. `r.json()`
+      then throws "Unexpected token '<'", which used to reject the whole load.
+      We read as text and say plainly that the feed returned HTML.
+   2. The endpoint hangs. There was no timeout at all, so a stuck request left
+      the page "Loading" until the tab was closed. AbortController fixes it.
+   3. The failure is transient - two of nine digest runs against this same feed
+      404'd on 2026-09-03 and succeeded on retry. So retry once with backoff
+      before telling anyone anything is wrong. */
+async function fetchJson(url, opts) {
+  const o = opts || {};
+  // Generous, because this endpoint is genuinely slow: the t-sheet feed measured
+  // 14-16s and one quote-feed response took 24s. A tight timeout would turn a
+  // working-but-slow feed into a failure, which is a worse bug than the one being
+  // fixed. Bounded all the same — before this there was no timeout anywhere and a
+  // stuck request left the page reading "Loading" until the tab was closed.
+  const timeout = o.timeout || 40000;
+  const attempts = (o.retries == null ? 1 : o.retries) + 1;
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, o.backoff || 1500));
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeout);
+    try {
+      const resp = await fetch(url, { method: 'GET', signal: ctl.signal, cache: 'no-store' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const text = await resp.text();
+      // Google serves its 404 and its "temporarily unavailable" interstitial as
+      // HTML with a 200 often enough that the status code alone is not proof.
+      if (/^\s*</.test(text)) throw new Error('endpoint returned HTML, not JSON');
+      try { return JSON.parse(text); }
+      catch (err) { throw new Error('endpoint returned unparseable JSON'); }
+    } catch (err) {
+      const timedOut = err && err.name === 'AbortError';
+      lastErr = timedOut
+        ? new Error('timed out after ' + Math.round(timeout / 1000) + 's')
+        : err;
+      // Retry a FAST failure — the intermittent 404 / HTML interstitial, which
+      // succeeds on the very next call — but never a timeout. The endpoint is
+      // already known to be slow; a second full-length wait helps nobody and
+      // doubles the time before the user is told anything.
+      if (timedOut) break;
+    } finally { clearTimeout(timer); }
+  }
+  throw lastErr;
+}
 // The Excel report sends SHORT store names ("Uptown", "South Skokie"); every
 // other source sends either the short name or the long "X Xfinity Store" form.
 // There is no per-store mapping table any more: the canonical long form is
@@ -1131,6 +1289,7 @@ function normalizeStoreName(raw) {
   if (!cleaned) return '';
   return fallbackShortName(cleaned) + ' Xfinity Store';
 }
+let trafficLoaded = false;  // the xlsx is its own source; a real 0 is not "no data"
 let trafficByStore = {}; // { 'Storename Xfinity Store': mtdCMTDTraffic }
 let internetsByStore = {}; // { 'Storename Xfinity Store': mtdHSISold }
 
@@ -1337,6 +1496,19 @@ let searchTerm = '';
 // page rebuild waits until the user has closed the modal.
 let pendingRender = false;
 
+/* Where the numbers currently on screen came from.
+   'none'     - nothing has loaded; stat cards still read "—", never "0".
+   'snapshot' - pre-aggregated totals, labelled with their own timestamp.
+   'live'     - the t-sheet feed. Overwrites snapshot the moment it lands and
+                never goes back: a later feed FAILURE leaves the last good live
+                numbers up rather than reverting to older snapshot ones. */
+let dataSource = 'none';
+let snapshotCounts = null;   // parsed tsheet-counts.json, validated
+let snapshotFlags = null;    // parsed tsheet-flags.json, validated
+let snapshotAt = '';         // generated_at of whichever snapshot is showing
+let feedError = '';          // last t-sheet feed failure, '' when healthy
+let feedRetrying = false;
+
 
 // Fiscal month name for today, e.g. Aug 28 falls in the Aug 22 - Sep 21
 // period, which is "September".
@@ -1357,6 +1529,189 @@ function updateTitleWithMonth() {
   }
 }
 
+/* ============================================================
+   PRE-AGGREGATED SNAPSHOT
+   Paints real numbers in well under a second while the 2.3 MB / ~15s live feed
+   is still in flight, and - more importantly - keeps real numbers on screen when
+   that feed 404s, which it does intermittently.
+
+   The hard rule here is that a snapshot figure must never be mistaken for a live
+   one. Two defences: every snapshot figure is accompanied by a banner naming it
+   and its timestamp (setFeedBanner), and the validation below refuses any
+   snapshot whose window does not match what this page is currently showing.
+   ============================================================ */
+
+/* Reject a snapshot rather than show a number that means something different
+   from the heading above it. `cycle_start` must be the fiscal period this page
+   has open (the generator and this file both use the 22nd), and `day` must be
+   today, or the "Today" column would be yesterday's under a "Today" label. */
+function snapshotIsCurrent(snap) {
+  if (!snap || !snap.stores || typeof snap.stores !== 'object') return false;
+  const start = currentFiscalStart();
+  const wantCycle = start.getFullYear() + '-' + pad(start.getMonth() + 1) + '-' + pad(start.getDate());
+  if (String(snap.cycle_start || '') !== wantCycle) return false;
+  if (String(snap.day || '') !== todayKey()) return false;
+  return true;
+}
+
+/* The flag snapshot is only usable if it was produced by the SAME rule this page
+   paints red. If the digest job's rule or window ever moves, the dashboard drops
+   its flags rather than showing red names this file cannot justify. */
+function snapshotFlagsUsable(f) {
+  return !!(f && f.stores && typeof f.stores === 'object' &&
+            Number(f.window_ms) === RAPID_WINDOW_MS &&
+            String(f.day || '') === todayKey());
+}
+
+/* tsheet-flags.json -> the exact index shape buildRapidFlags() produces, so
+   every renderer downstream is untouched and cannot tell the difference. */
+function rapidFlagsFromSnapshot(f) {
+  const index = { stores: {}, districts: {}, any: false };
+  if (!snapshotFlagsUsable(f)) return index;
+  Object.keys(f.stores).forEach(rawStore => {
+    const storeName = normalizeStoreName(rawStore);
+    const src = (f.stores[rawStore] || {}).reps || {};
+    const reps = {};
+    const flaggedTimes = new Set();
+    Object.keys(src).forEach(rep => {
+      const clusters = (src[rep].clusters || [])
+        .map(c => (c || []).map(t => new Date(t)).filter(d => !isNaN(d.getTime())))
+        .filter(c => c.length >= 2);
+      if (!clusters.length) return;
+      let flaggedCount = 0;
+      clusters.forEach(c => { flaggedCount += c.length; c.forEach(t => flaggedTimes.add(rep + '|' + t.getTime())); });
+      reps[rep] = { flaggedCount: flaggedCount, clusterCount: clusters.length, clusters: clusters };
+    });
+    const repNames = Object.keys(reps);
+    if (!repNames.length) return;
+    index.stores[storeName] = { reps: reps, repCount: repNames.length, flaggedTimes: flaggedTimes };
+    index.any = true;
+    const d = STORE_TO_DISTRICT[storeName];
+    if (d) index.districts[d.key] = (index.districts[d.key] || 0) + repNames.length;
+  });
+  return index;
+}
+
+/* Fails silently, always. The snapshot is an accelerator, not a dependency: if
+   it is missing, stale or malformed the page simply waits for the live feed
+   exactly as it did before, and the user is told nothing about a file they have
+   never heard of. console.debug, not console.error, for the same reason. */
+async function loadSnapshot() {
+  try {
+    const [counts, flags] = await Promise.all([
+      fetchJson(SNAPSHOT_COUNTS_URL, { timeout: 6000, retries: 0 }),
+      fetchJson(SNAPSHOT_FLAGS_URL, { timeout: 6000, retries: 0 }).catch(() => null)
+    ]);
+    if (!snapshotIsCurrent(counts)) return;
+    // The live feed got there first — never step on it.
+    if (dataSource === 'live') return;
+    snapshotCounts = counts;
+    snapshotFlags = snapshotFlagsUsable(flags) ? flags : null;
+    snapshotAt = String(counts.generated_at || '');
+    dataSource = 'snapshot';
+    safeStorage.set('tss:lastSnapshotAt', snapshotAt);
+    if (!isModalOpen()) render(); else pendingRender = true;
+    setFeedBanner();
+  } catch (err) {
+    console.debug('snapshot unavailable, waiting for the live feed', err);
+  }
+}
+
+/* One place that decides what the page says about its own data. */
+function setFeedBanner() {
+  const el = document.getElementById('feed-banner');
+  if (!el) return;
+  const dot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+  const footer = document.getElementById('last-updated');
+
+  /* The footer used to be the only place the page reported its own health, and
+     it could sit on "Loading..." indefinitely because nothing ever timed the
+     feed out. Whenever the live feed is not the thing on screen, the footer says
+     what IS on screen instead. */
+  if (footer && dataSource !== 'live') {
+    footer.textContent = dataSource === 'snapshot'
+      ? 'Snapshot totals from ' + snapshotStamp() + (feedError ? ' — live feed unavailable' : ' — live feed still loading')
+      : (feedError ? 'T-sheet feed unavailable — retrying automatically' : 'Loading…');
+  }
+
+  const retry = '<button class="feed-retry" type="button" onclick="retryFeed()"' +
+                (feedRetrying ? ' disabled' : '') + '>' +
+                (feedRetrying ? 'Retrying…' : 'Retry') + '</button>';
+
+  if (!feedError) {
+    if (dataSource === 'live') {
+      el.className = 'feed-banner hidden';
+      el.innerHTML = '';
+      if (dot) dot.className = 'status-dot';
+      if (statusText) statusText.textContent = 'Live';
+      return;
+    }
+    if (dataSource === 'snapshot') {
+      el.className = 'feed-banner';
+      el.innerHTML = '<span class="feed-banner-head">Snapshot</span>' +
+        '<span class="feed-banner-msg">Showing the <b>' + htmlEscape(snapshotStamp()) +
+        '</b> pre-aggregated snapshot while the live t-sheet feed loads. ' +
+        'Daily grid and per-submission detail fill in when it arrives.</span>';
+      if (dot) dot.className = 'status-dot loading';
+      if (statusText) statusText.textContent = 'Snapshot';
+      return;
+    }
+    el.className = 'feed-banner hidden';
+    el.innerHTML = '';
+    return;
+  }
+
+  // Feed is down. Which banner depends on whether anything real is on screen.
+  if (dataSource === 'live') {
+    // Last good live numbers are still up; say they are going stale, do not
+    // wipe them and do not pretend they are current.
+    el.className = 'feed-banner';
+    el.innerHTML = '<span class="feed-banner-head">Not refreshing</span>' +
+      '<span class="feed-banner-msg">The t-sheet feed stopped responding (<b>' +
+      htmlEscape(feedError) + '</b>). The numbers below are the last good sync and are no ' +
+      'longer updating.</span>' + retry;
+    if (dot) dot.className = 'status-dot error';
+    if (statusText) statusText.textContent = 'Stale';
+    return;
+  }
+  if (dataSource === 'snapshot') {
+    el.className = 'feed-banner';
+    el.innerHTML = '<span class="feed-banner-head">Snapshot only</span>' +
+      '<span class="feed-banner-msg">The live t-sheet feed is not responding (<b>' +
+      htmlEscape(feedError) + '</b>), so these are the <b>' + htmlEscape(snapshotStamp()) +
+      '</b> pre-aggregated totals, not live numbers. Daily grid and per-submission ' +
+      'detail need the live feed.</span>' + retry;
+    if (dot) dot.className = 'status-dot error';
+    if (statusText) statusText.textContent = 'Snapshot';
+    return;
+  }
+  el.className = 'feed-banner error';
+  el.innerHTML = '<span class="feed-banner-head">No data</span>' +
+    '<span class="feed-banner-msg">The t-sheet feed could not be read (<b>' +
+    htmlEscape(feedError) + '</b>) and no snapshot was available, so this page has ' +
+    '<b>no submission data to show</b> — the blank figures below are not zeroes.</span>' + retry;
+  if (dot) dot.className = 'status-dot error';
+  if (statusText) statusText.textContent = 'Offline';
+}
+
+function snapshotStamp() {
+  const d = new Date(snapshotAt);
+  if (isNaN(d.getTime())) return 'earlier';
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return sameDay ? t : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + t;
+}
+
+/* Retry without a reload. A reload costs another ~15s and re-downloads ~5 MB,
+   and throws away whatever is already on screen. */
+function retryFeed() {
+  if (feedRetrying) return;
+  feedRetrying = true;
+  setFeedBanner();
+  fetchData(true).finally(() => { feedRetrying = false; setFeedBanner(); });
+}
+
 async function fetchData(isManual = false) {
   const dot = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
@@ -1370,71 +1725,116 @@ async function fetchData(isManual = false) {
     return;
   }
 
-  // Fetch T-Sheets and Internet Quote Sheets in parallel.
-  const tSheetReq = fetch(APPS_SCRIPT_URL + '?t=' + Date.now(), { method: 'GET' })
-    .then(r => r.json());
+  /* ----------------------------------------------------------------
+     Perf + resilience (2026-09-03). This function used to end in one
+     `await Promise.all([tSheets, quote, traffic, directory])`, which had two
+     consequences, both of them measured:
 
-  const quoteConfigured = QUOTE_SCRIPT_URL && QUOTE_SCRIPT_URL !== 'PASTE_QUOTE_SHEETS_WEB_APP_URL_HERE';
-  const quoteReq = quoteConfigured
-    ? fetch(QUOTE_SCRIPT_URL + '?t=' + Date.now(), { method: 'GET' })
-        .then(r => r.json())
-        .catch(err => { console.error('quote fetch failed', err); return { success: false }; })
-    : Promise.resolve({ success: true, submissions: [] });
+     1. NOTHING rendered until the SLOWEST of the four finished. The t-sheet
+        feed is ~2.3 MB and ~15s, so every other source - the 33 KB directory,
+        the 837 KB quote feed, the traffic xlsx - sat finished and unused behind
+        it. First data on screen: 15.6s. Stalling SheetJS pushed it to 26.6s
+        even though SheetJS has nothing to do with t-sheet counts.
+     2. A single rejection killed the whole load. `r.json()` on the Apps Script
+        404 (an HTML error page) throws, the Promise.all rejects, `render()` is
+        never called, and the page sits on six zeroes reading "Live" - which is
+        not an error state, it is a dashboard confidently reporting that nobody
+        submitted anything. That is the "it fails sometimes" complaint.
 
-  // MTD Fiscal Traffic from Daily Sales Report xlsx (independent — failures don't block t-sheets)
-  const trafficReq = fetchSalesReportTraffic()
-    .catch(err => { console.error('traffic fetch failed', err); return {}; });
+     So each source is now its own stream that renders as soon as IT lands, and
+     no stream can reject another. Order still matters in exactly one place -
+     the roster has to be applied before anything buckets a submission - and
+     that is preserved by chaining the t-sheet apply behind the directory
+     settling, not by making them share a gate.
+     ---------------------------------------------------------------- */
 
-  // Live district roster, same independence contract as the traffic feed: it
-  // rides along with the poll (so moving a store in the Admin Panel shows up
-  // within 30s) and a failure resolves to null instead of rejecting, so it can
-  // never take the t-sheets down with it.
+  // Live district roster. Same independence contract as before: it rides along
+  // with the poll (so moving a store in the Admin Panel shows up within 30s) and
+  // a failure resolves to null instead of rejecting.
   const directoryReq = Promise.race([
     fetchStoreDirectory().catch(err => { console.warn('store directory fetch failed', err); return null; }),
     new Promise(resolve => setTimeout(() => resolve(null), DIRECTORY_TIMEOUT_MS))
-  ]);
-
-  try {
-    const [data, quoteData, trafficData, dirData] = await Promise.all([tSheetReq, quoteReq, trafficReq, directoryReq]);
-
+  ]).then(dirData => {
     // Apply the roster BEFORE anything buckets a submission — buildCounts(),
     // renderDailyGrid() and STORE_TO_DISTRICT all read DISTRICTS at call time.
     if (dirData) applyStoreDirectory(dirData);
-    if (!data.success) throw new Error(data.error || 'Unknown error');
+    return dirData;
+  });
 
-    submissions = data.submissions || [];
-    // Normalize main T-Sheet store names so legacy variants like the pre-2026
-    // "Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
-    submissions.forEach(s => { s.store = normalizeStoreName(s.store); });
-    quoteSubmissions = (quoteData && quoteData.success && quoteData.submissions) || [];
-    // The Internet Quote Sheet form returns short store names (e.g. "Evergreen Park").
-    // Normalize them to the canonical "X Xfinity Store" form used by DISTRICTS so they
-    // get attributed to the correct store instead of orphaned keys.
-    quoteSubmissions.forEach(s => { s.store = normalizeStoreName(s.store); });
-    trafficByStore = (trafficData && trafficData.traffic) || {};
-    internetsByStore = (trafficData && trafficData.internets) || {};
+  // T-SHEETS — the only source whose failure the user needs to hear about.
+  // Retries once with backoff first: two of nine digest runs against this exact
+  // endpoint 404'd on 2026-09-03 and succeeded on the next attempt.
+  const tSheetReq = directoryReq
+    .then(() => fetchJson(APPS_SCRIPT_URL + '?t=' + Date.now(), { retries: 1 }))
+    .then(data => {
+      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'feed reported failure');
+      submissions = data.submissions || [];
+      // Normalize main T-Sheet store names so legacy variants like the pre-2026
+      // "Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
+      submissions.forEach(s => { s.store = normalizeStoreName(s.store); });
+      dataSource = 'live';
+      feedError = '';
+      const now = new Date();
+      document.getElementById('last-updated').textContent =
+        'Last sync: ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      paint();
+    })
+    .catch(err => {
+      // Message, not stack: this string goes in front of a district manager.
+      feedError = String((err && err.message) || err);
+      console.error('t-sheet feed failed', err);
+      document.getElementById('last-updated').textContent =
+        dataSource === 'live'
+          ? 'Last sync failed — showing the previous sync'
+          : 'T-sheet feed unavailable — retrying automatically';
+      paint();
+    });
 
-    dot.className = 'status-dot';
-    statusText.textContent = 'Live';
+  // INTERNET QUOTE SHEETS — a second ~837 KB Apps Script deployment on the same
+  // platform, with the same intermittent 404. It was inside the old Promise.all,
+  // so it was on the critical path for the Overview tab even though it only
+  // feeds the Internet Quote Sheets tab. It is now fully independent.
+  const quoteConfigured = QUOTE_SCRIPT_URL && QUOTE_SCRIPT_URL !== 'PASTE_QUOTE_SHEETS_WEB_APP_URL_HERE';
+  const quoteReq = (quoteConfigured
+    ? fetchJson(QUOTE_SCRIPT_URL + '?t=' + Date.now(), { retries: 1 })
+    : Promise.resolve({ success: true, submissions: [] }))
+    .then(quoteData => {
+      quoteSubmissions = (quoteData && quoteData.success && quoteData.submissions) || [];
+      // The Internet Quote Sheet form returns short store names (e.g. "Evergreen Park").
+      // Normalize them to the canonical "X Xfinity Store" form used by DISTRICTS so they
+      // get attributed to the correct store instead of orphaned keys.
+      quoteSubmissions.forEach(s => { s.store = normalizeStoreName(s.store); });
+      paint();
+    })
+    .catch(err => { console.error('quote fetch failed', err); });
 
-    const now = new Date();
-    document.getElementById('last-updated').textContent =
-      'Last sync: ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  // MTD Fiscal Traffic from the Daily Sales Report xlsx. Independent as before,
+  // but no longer gating the t-sheet numbers behind SheetJS finishing.
+  const trafficReq = fetchSalesReportTraffic()
+    .then(trafficData => {
+      trafficByStore = (trafficData && trafficData.traffic) || {};
+      internetsByStore = (trafficData && trafficData.internets) || {};
+      trafficLoaded = true;
+      paint();
+    })
+    .catch(err => { console.error('traffic fetch failed', err); });
 
-    // Never rebuild the page underneath an open detail modal — the numbers
-    // would shift while the user is reading them. Redraw once it is closed.
-    if (isModalOpen()) {
-      pendingRender = true;
-    } else {
-      render();
-    }
-  } catch (err) {
-    console.error(err);
-    dot.className = 'status-dot error';
-    statusText.textContent = 'Offline';
-    document.getElementById('last-updated').textContent =
-      'Connection error — retrying automatically';
-  }
+  // The roster can land well before any feed does; repaint so a directory-only
+  // change (or the fallback notice) is not held back by a slow feed.
+  directoryReq.then(() => paint()).catch(() => {});
+
+  // Resolves when everything has settled, so retryFeed() can re-enable its
+  // button at the right moment. Nothing on screen waits for this.
+  await Promise.all([tSheetReq, quoteReq, trafficReq, directoryReq.catch(() => null)]);
+}
+
+/* Every stream calls this instead of render(). Keeps the "never rebuild under an
+   open modal" rule in one place now that four callers can trigger a repaint, and
+   keeps the banner in step with whatever just landed. */
+function paint() {
+  setFeedBanner();
+  if (isModalOpen()) { pendingRender = true; return; }
+  render();
 }
 
 async function fetchSalesReportTraffic() {
@@ -1609,6 +2009,37 @@ function buildCounts() {
   DISTRICTS.forEach(d => d.stores.forEach(s => {
     stores[s] = { today: 0, mtd: 0, traffic: trafficByStore[s] || 0, reps: {} };
   }));
+
+  /* Snapshot mode (2026-09-03): the pre-aggregated file carries the SAME two
+     figures per store and per rep that the loop below derives from raw rows -
+     today and mtd, over the same fiscal window (validated in
+     snapshotIsCurrent()). So it fills the identical structure and every renderer
+     downstream is untouched. What it cannot supply is the submission rows
+     themselves, which is why the daily grid and the modals stay empty and the
+     banner says so. The moment the live feed lands, dataSource flips to 'live'
+     and this branch is never taken again. */
+  if (dataSource === 'snapshot' && snapshotCounts) {
+    Object.keys(snapshotCounts.stores).forEach(raw => {
+      const name = normalizeStoreName(raw);
+      const src = snapshotCounts.stores[raw] || {};
+      if (!stores[name]) stores[name] = { today: 0, mtd: 0, traffic: trafficByStore[name] || 0, reps: {} };
+      stores[name].today += Number(src.today) || 0;
+      stores[name].mtd += Number(src.mtd) || 0;
+      const reps = src.reps || {};
+      Object.keys(reps).forEach(rep => {
+        const key = String(rep).trim() || '(unknown)';
+        if (!stores[name].reps[key]) stores[name].reps[key] = { today: 0, mtd: 0 };
+        stores[name].reps[key].today += Number(reps[rep].today) || 0;
+        stores[name].reps[key].mtd += Number(reps[rep].mtd) || 0;
+      });
+    });
+    const districts = DISTRICTS.map(d => {
+      let today = 0, mtd = 0, traffic = 0;
+      d.stores.forEach(s => { today += stores[s].today; mtd += stores[s].mtd; traffic += stores[s].traffic || 0; });
+      return Object.assign({}, d, { today, mtd, traffic });
+    });
+    return { stores, districts };
+  }
 
   submissions.forEach(s => {
     if (!isThisMonth(s)) return;
@@ -1923,8 +2354,18 @@ function render() {
   const openSections = captureExpanded();
   const mtdSubs = submissions.filter(isThisMonth);
   const todaySubs = mtdSubs.filter(isToday);
-  document.getElementById('stat-today').textContent = todaySubs.length;
-  document.getElementById('stat-mtd').textContent = mtdSubs.length;
+
+  const { stores, districts } = buildCounts();
+
+  /* Headline figures. Read off `districts` rather than off `submissions`, so the
+     six stat cards agree with the district totals underneath them whichever
+     source is live - and so that a page with NO data shows "—" instead of the
+     confident "0" that used to make a dead feed look like a quiet day. */
+  const haveData = dataSource !== 'none';
+  const totalToday = districts.reduce((a, d) => a + d.today, 0);
+  const totalMtd   = districts.reduce((a, d) => a + d.mtd, 0);
+  document.getElementById('stat-today').textContent = haveData ? totalToday : '—';
+  document.getElementById('stat-mtd').textContent   = haveData ? totalMtd : '—';
   // Spell the fiscal window out so nobody reads "MTD" as the calendar month.
   const mtdSubEl = document.getElementById('stat-mtd-sub');
   if (mtdSubEl) mtdSubEl.textContent = fiscalRangeLabel(currentFiscalStart());
@@ -1937,21 +2378,35 @@ function render() {
     const dow = d.getDay();
     if (dow !== 0 && dow !== 6) businessDays++;
   }
-  const avg = businessDays > 0 ? (mtdSubs.length / businessDays).toFixed(1) : '0';
-  document.getElementById('stat-avg').textContent = avg;
+  const avg = businessDays > 0 ? (totalMtd / businessDays).toFixed(1) : '0';
+  document.getElementById('stat-avg').textContent = haveData ? avg : '—';
 
-  const repsTodaySet = new Set();
-  todaySubs.forEach(s => {
-    const rep = String(s.rep_name || '').trim();
-    if (rep) repsTodaySet.add(rep + '|' + s.store);
-  });
-  document.getElementById('stat-reps').textContent = repsTodaySet.size;
-
-  const { stores, districts } = buildCounts();
+  // Reps active today: distinct rep+store pairs with at least one submission
+  // today. From the rows when they exist, from the per-rep snapshot totals when
+  // they do not — the same quantity either way.
+  let repsToday = 0;
+  if (dataSource === 'snapshot') {
+    Object.keys(stores).forEach(n => Object.keys(stores[n].reps).forEach(r => {
+      if (r !== '(unknown)' && stores[n].reps[r].today > 0) repsToday++;
+    }));
+  } else {
+    const repsTodaySet = new Set();
+    todaySubs.forEach(s => {
+      const rep = String(s.rep_name || '').trim();
+      if (rep) repsTodaySet.add(rep + '|' + s.store);
+    });
+    repsToday = repsTodaySet.size;
+  }
+  document.getElementById('stat-reps').textContent = haveData ? repsToday : '—';
 
   // Computed ONCE per render, beside buildCounts(), over today's rows only.
   // Every renderer below reads this index; none of them re-scan submissions.
-  rapidFlags = buildRapidFlags(todaySubs);
+  // In snapshot mode the digest job already ran the identical rule (the window
+  // and rule id are checked in snapshotFlagsUsable()), so the red names are the
+  // same names — they are just precomputed.
+  rapidFlags = dataSource === 'snapshot'
+    ? rapidFlagsFromSnapshot(snapshotFlags)
+    : buildRapidFlags(todaySubs);
   const legendEl = document.getElementById('flag-legend');
   if (legendEl) legendEl.classList.toggle('hidden', !rapidFlags.any);
 
@@ -1960,12 +2415,29 @@ function render() {
   const totalTraffic = districts.reduce((acc, d) => acc + (d.traffic || 0), 0);
   const trafEl = document.getElementById('stat-traffic');
   const tcrEl = document.getElementById('stat-tcr');
-  if (trafEl) trafEl.textContent = totalTraffic.toLocaleString();
-  if (tcrEl) tcrEl.textContent = fmtPct(mtdSubs.length, totalTraffic);
+  // Traffic has its own source (the xlsx) and lands on its own schedule, so it
+  // shows a real 0 as soon as that source is in, independently of the feed.
+  if (trafEl) trafEl.textContent = trafficLoaded ? totalTraffic.toLocaleString() : '—';
+  if (tcrEl) tcrEl.textContent = haveData ? fmtPct(totalMtd, totalTraffic) : '—';
 
-  renderOverview(districts, stores);
-  renderRepView(districts, stores);
-  renderDailyGrid(mtdSubs);
+  /* With no t-sheet data at all, the district and rep rows would render a full
+     roster of "0 TODAY / 0 MTD" - the same false zero the stat cards above were
+     just fixed for, only further down the page and harder to disbelieve. Show an
+     empty state instead and let the banner explain. The quote and last-month
+     views have their own sources and their own empty states, so they still run. */
+  if (dataSource === 'none') {
+    const msg = '<div class="empty">No t-sheet data loaded — see the notice above.</div>';
+    const ov = document.getElementById('district-overview');
+    const rb = document.getElementById('rep-breakdown');
+    const dg = document.getElementById('daily-grid');
+    if (ov) ov.innerHTML = msg;
+    if (rb) rb.innerHTML = msg;
+    if (dg) dg.innerHTML = msg;
+  } else {
+    renderOverview(districts, stores);
+    renderRepView(districts, stores);
+    renderDailyGrid(mtdSubs);
+  }
   renderQuoteView();
   renderLastMonthView();
 
@@ -2927,6 +3399,16 @@ function escapeAttr(str) {
 
 updateTitleWithMonth();
 setInterval(updateTitleWithMonth, 60000); // refresh title every minute so it rolls over at midnight
+
+/* Boot (2026-09-03). Paint the empty shell first, so the tabs, search box and
+   headings are on screen and interactive immediately instead of after the feed.
+   Then fire the 11 KB snapshot and the 2.3 MB live feed at the same time: the
+   snapshot fills in real, labelled numbers in well under a second, the feed
+   replaces them ~15s later, and if the feed never arrives the snapshot is what
+   stops this page from being a wall of zeroes. loadSnapshot() checks
+   dataSource before it writes, so whichever finishes first, the live feed wins. */
+render();
+loadSnapshot();
 fetchData();
 setInterval(fetchData, 30000);
 
