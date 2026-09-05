@@ -347,15 +347,32 @@
     white-space: nowrap;
   }
 
+  /* ── Row stat columns ─────────────────────────────────────────────────
+     A fixed-width GRID, not a flex row.
+
+     As flex, every row sized its own columns, so TODAY / MTD / TRAFFIC /
+     T-CHART % landed at a different x on each line depending on how long the
+     store name was and whether it carried a flag badge. The numbers never
+     lined up down the page, and on a phone the last column ran off the edge
+     entirely - "T-CHART %" wrapped onto three lines or was simply cut off.
+
+     A fixed track width means every row - district or store, indented or not,
+     flagged or not - puts its columns in exactly the same place. The fifth
+     track is the chevron: district rows have one, store rows do not, and
+     reserving the space either way is what keeps the two aligned with each
+     other. */
   .counts {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) 14px;
     align-items: center;
-    gap: 14px;
+    gap: 10px;
+    width: 296px;
+    flex: 0 0 auto;
   }
 
   .count {
     text-align: center;
-    min-width: 34px;
+    min-width: 0;
   }
 
   .count-value {
@@ -372,6 +389,9 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-top: 2px;
+    /* "T-CHART %" is the longest label and the one that used to wrap onto
+       three lines, which is what made the rows different heights. */
+    white-space: nowrap;
   }
 
   .chevron {
@@ -886,6 +906,62 @@
   }
   .daily-table tr.store-row:hover td:not(.col-total) { background: #141414; }
   .daily-table tr.store-row:hover td.col-total { background: #1f1f1f; }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     RESPONSIVE BLOCK - KEEP THIS LAST.
+     Several rules further up redefine the same properties (.store-header
+     re-declares its padding shorthand, which silently beat this block when
+     it sat higher in the file and left store columns 14px off from the
+     district row above them). Equal specificity means source order decides,
+     so anything added after this will override the phone layout.
+     ═══════════════════════════════════════════════════════════════════ */
+  /* ── Phones ───────────────────────────────────────────────────────────
+     Below this width there is not enough room for a name and four stat
+     columns side by side, so the name takes the first line and the stats get
+     the full width underneath. Because the stat block is then exactly the
+     same width on every row, the columns line up perfectly down the page -
+     which is the whole point. Nothing is hidden and nothing is truncated. */
+  @media (max-width: 620px) {
+    .district-header,
+    .store-header {
+      flex-wrap: wrap;
+      gap: 10px 12px;
+      padding: 12px 14px;
+    }
+    /* Store rows keep their visual indent on the NAME only. If the whole row
+       were indented, its stat block would start 6px right of the district row
+       above it and the columns would not line up - which is the thing being
+       fixed. Indent the label, align the numbers. */
+    .store-header { padding-left: 14px; }
+    .store-name { padding-left: 14px; }
+
+    .header-info,
+    .store-name { flex: 1 1 100%; min-width: 0; }
+
+    .counts {
+      width: 100%;
+      gap: 4px;
+      grid-template-columns: repeat(4, minmax(0, 1fr)) 12px;
+    }
+    .count-value { font-size: 16px; }
+    .count-label { font-size: 9px; letter-spacing: 0.2px; }
+    .chevron { width: 12px; font-size: 15px; }
+
+    /* The district meta line (DM + store count + flag note) has room to
+       breathe now that it owns a full line. */
+    .item-meta { white-space: normal; }
+
+    /* Two short lines beat one truncated one: "September T-Sheet Sub..." told
+       nobody anything. */
+    h1 { white-space: normal; overflow: visible; font-size: 16px; }
+    .header-top { align-items: flex-start; }
+
+    /* The tab strip already scrolls horizontally; tighter padding just fits
+       more of it on screen before anyone has to swipe. */
+    .tab { padding: 10px 12px; font-size: 13px; }
+    .header-inner { padding: 14px 14px 0; }
+    .container { padding-left: 14px; padding-right: 14px; }
+  }
 </style>
 <!-- Perf (2026-09-03): this tag carried no `defer`, so HTML parsing stopped
      dead here until blufoxmobile.github.io answered. Measured: stalling
@@ -1503,6 +1579,38 @@ let pendingRender = false;
                 never goes back: a later feed FAILURE leaves the last good live
                 numbers up rather than reverting to older snapshot ones. */
 let dataSource = 'none';
+
+/* ── LIVE AGGREGATE SOURCES (2026-09-05) ───────────────────────────────
+   This page used to pull the ENTIRE feed - 2.4 MB, 14,000+ rows, 11-15 s -
+   every 30 seconds, from every open tab. The execution log showed doGet
+   firing every 1-3 seconds with four or more running at once: roughly
+   60 MB a minute off one Apps Script, to display counts. That single fact
+   caused everything people complained about here - the slow load, the
+   placeholder snapshot, the staleness banner, and the intermittent 404s.
+
+   Two narrow endpoints replace it:
+     scope=today    3.5 KB, ~1 s. Real rows with real timestamps, so the
+                    five-minute rapid-fire rule still runs on actual data.
+     scope=summary  per day/store/rep counts for the previous AND current
+                    fiscal cycle. Every historical view here needs sums,
+                    not rows.
+
+   The full feed still loads, but quietly in the background and at most
+   every FULL_REFRESH_MS - only so that clicking into a PAST day can still
+   show individual submissions. Nothing on the 30-second path touches it.
+
+   historyDays is also more CORRECT than the full feed, not just smaller:
+   the feed returns the previous calendar month, while the fiscal cycle
+   starts on the 22nd, so it was missing the first ~10 days of every "last
+   month" - 4,004 submissions on 2026-09-05, a 32% undercount that looked
+   like a real number. Prefer historyDays wherever both exist. */
+const TODAY_URL       = APPS_SCRIPT_URL + '?scope=today';
+const SUMMARY_URL     = APPS_SCRIPT_URL + '?scope=summary';
+const FULL_REFRESH_MS = 10 * 60 * 1000;
+
+let todayRows   = null;  // scope=today rows, store names normalized
+let historyDays = null;  // scope=summary: { 'YYYY-MM-DD': { store: { rep: n } } }
+let lastFullAt  = 0;     // Date.now() of the last full-feed fetch
 let snapshotCounts = null;   // parsed tsheet-counts.json, validated
 let snapshotFlags = null;    // parsed tsheet-flags.json, validated
 let snapshotAt = '';         // generated_at of whichever snapshot is showing
@@ -1764,15 +1872,16 @@ async function fetchData(isManual = false) {
   // T-SHEETS — the only source whose failure the user needs to hear about.
   // Retries once with backoff first: two of nine digest runs against this exact
   // endpoint 404'd on 2026-09-03 and succeeded on the next attempt.
-  const tSheetReq = directoryReq
-    .then(() => fetchJson(APPS_SCRIPT_URL + '?t=' + Date.now(), { retries: 1 }))
+  /* TODAY - the live path. 3.5 KB, ~1 s, every poll. This is what makes the
+     page live and what removed the need for a placeholder snapshot. */
+  const todayReq = directoryReq
+    .then(() => fetchJson(TODAY_URL + '&t=' + Date.now(), { retries: 1 }))
     .then(data => {
-      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'feed reported failure');
-      submissions = data.submissions || [];
-      // Normalize main T-Sheet store names so legacy variants like the pre-2026
-      // "Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
-      submissions.forEach(s => { s.store = normalizeStoreName(s.store); });
-      dataSource = 'live';
+      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'today feed reported failure');
+      const rows = data.submissions || [];
+      rows.forEach(s => { s.store = normalizeStoreName(s.store); });
+      todayRows = rows;
+      if (dataSource !== 'live') dataSource = 'live';
       feedError = '';
       const now = new Date();
       document.getElementById('last-updated').textContent =
@@ -1780,14 +1889,42 @@ async function fetchData(isManual = false) {
       paint();
     })
     .catch(err => {
-      // Message, not stack: this string goes in front of a district manager.
       feedError = String((err && err.message) || err);
-      console.error('t-sheet feed failed', err);
-      document.getElementById('last-updated').textContent =
-        dataSource === 'live'
-          ? 'Last sync failed — showing the previous sync'
-          : 'T-sheet feed unavailable — retrying automatically';
+      console.error('today feed failed', err);
       paint();
+    });
+
+  /* HISTORY - MTD, the daily grid and Last Month. Counts only, one fetch,
+     and the only source that covers the fiscal window completely. */
+  const summaryReq = directoryReq
+    .then(() => fetchJson(SUMMARY_URL + '&t=' + Date.now(), { retries: 1 }))
+    .then(data => {
+      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'summary reported failure');
+      historyDays = data.days || null;
+      if (historyDays && dataSource !== 'live') dataSource = 'live';
+      paint();
+    })
+    .catch(err => { console.error('summary feed failed', err); });
+
+  /* FULL FEED - individual rows for PAST days, so the daily-grid modals keep
+     working. Background only, at most every FULL_REFRESH_MS, and never on the
+     30-second path: this is the 2.4 MB request that was flooding the script. */
+  const needFull = submissions.length === 0 || (Date.now() - lastFullAt) > FULL_REFRESH_MS;
+  const tSheetReq = !needFull ? Promise.resolve() : directoryReq
+    .then(() => { lastFullAt = Date.now(); return fetchJson(APPS_SCRIPT_URL + '?t=' + Date.now(), { retries: 1 }); })
+    .then(data => {
+      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'feed reported failure');
+      submissions = data.submissions || [];
+      // Normalize main T-Sheet store names so legacy variants like the pre-2026
+      // "Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
+      submissions.forEach(s => { s.store = normalizeStoreName(s.store); });
+      dataSource = 'live';
+      paint();
+    })
+    .catch(err => {
+      // Background only: today and history already painted, so a failure here
+      // costs past-day drill-down and nothing the user is looking at.
+      console.warn('background full feed failed (past-day detail unavailable)', err);
     });
 
   // INTERNET QUOTE SHEETS — a second ~837 KB Apps Script deployment on the same
@@ -1825,7 +1962,7 @@ async function fetchData(isManual = false) {
 
   // Resolves when everything has settled, so retryFeed() can re-enable its
   // button at the right moment. Nothing on screen waits for this.
-  await Promise.all([tSheetReq, quoteReq, trafficReq, directoryReq.catch(() => null)]);
+  await Promise.all([todayReq, summaryReq, tSheetReq, quoteReq, trafficReq, directoryReq.catch(() => null)]);
 }
 
 /* Every stream calls this instead of render(). Keeps the "never rebuild under an
@@ -2004,6 +2141,33 @@ function lastMonthLabel() { return fiscalLabel(prevFiscalStart()); }
 
 function isToday(s) { return submissionDayKey(s) === todayKey(); }
 
+/* ── day-key helpers ───────────────────────────────────────────────────
+   scope=summary keys days as yyyy-MM-dd in America/Chicago, which is the
+   business day these stores actually work. The helpers below convert
+   between those keys and the local Date objects the fiscal-window code
+   already uses, so both representations can be mixed without either one
+   silently reinterpreting a day boundary. */
+function dayKey(d) {
+  return d.getFullYear() + '-' +
+         String(d.getMonth() + 1).padStart(2, '0') + '-' +
+         String(d.getDate()).padStart(2, '0');
+}
+function dateFromKey(k) {
+  return new Date(Number(k.slice(0, 4)), Number(k.slice(5, 7)) - 1, Number(k.slice(8, 10)));
+}
+/* Walk every (day, store, rep, count) in historyDays inside [fromKey, toKey]. */
+function eachHistory(fromKey, toKey, fn) {
+  if (!historyDays) return;
+  Object.keys(historyDays).forEach(day => {
+    if (day < fromKey || day > toKey) return;
+    const byStore = historyDays[day];
+    Object.keys(byStore).forEach(store => {
+      const byRep = byStore[store];
+      Object.keys(byRep).forEach(rep => fn(day, store, rep, Number(byRep[rep]) || 0));
+    });
+  });
+}
+
 function buildCounts() {
   const stores = {};
   DISTRICTS.forEach(d => d.stores.forEach(s => {
@@ -2039,6 +2203,46 @@ function buildCounts() {
       return Object.assign({}, d, { today, mtd, traffic });
     });
     return { stores, districts };
+  }
+
+  /* Aggregate path (2026-09-05). historyDays covers the whole fiscal cycle
+     and is fetched in ~1 s; todayRows carries today at 30-second freshness.
+     Today is taken from the ROWS, not from the summary, so a submission
+     shows up on the next poll rather than waiting for the next summary. */
+  if (historyDays) {
+    const fromKey  = dayKey(currentFiscalStart());
+    const toKey    = dayKey(fiscalLastDay(currentFiscalStart()));  // 21st, inclusive
+    const todayKey = dayKey(new Date());
+    const haveTodayRows = Array.isArray(todayRows);
+
+    eachHistory(fromKey, toKey, (day, rawStore, rawRep, n) => {
+      if (day === todayKey && haveTodayRows) return;  // rows win for today
+      const name = normalizeStoreName(rawStore);
+      if (!stores[name]) stores[name] = { today: 0, mtd: 0, traffic: trafficByStore[name] || 0, reps: {} };
+      const rep = String(rawRep || '').trim() || '(unknown)';
+      if (!stores[name].reps[rep]) stores[name].reps[rep] = { today: 0, mtd: 0 };
+      stores[name].mtd += n;
+      stores[name].reps[rep].mtd += n;
+      if (day === todayKey) { stores[name].today += n; stores[name].reps[rep].today += n; }
+    });
+
+    if (haveTodayRows) {
+      todayRows.forEach(s => {
+        const name = normalizeStoreName(s.store);
+        if (!stores[name]) stores[name] = { today: 0, mtd: 0, traffic: trafficByStore[name] || 0, reps: {} };
+        const rep = String(s.rep_name || '').trim() || '(unknown)';
+        if (!stores[name].reps[rep]) stores[name].reps[rep] = { today: 0, mtd: 0 };
+        stores[name].mtd++; stores[name].today++;
+        stores[name].reps[rep].mtd++; stores[name].reps[rep].today++;
+      });
+    }
+
+    const districtsAgg = DISTRICTS.map(d => {
+      let today = 0, mtd = 0, traffic = 0;
+      d.stores.forEach(s => { today += stores[s].today; mtd += stores[s].mtd; traffic += stores[s].traffic || 0; });
+      return Object.assign({}, d, { today, mtd, traffic });
+    });
+    return { stores, districts: districtsAgg };
   }
 
   submissions.forEach(s => {
@@ -2353,7 +2557,11 @@ function isModalOpen() {
 function render() {
   const openSections = captureExpanded();
   const mtdSubs = submissions.filter(isThisMonth);
-  const todaySubs = mtdSubs.filter(isToday);
+  /* Today comes from scope=today when it is in: those rows arrive in ~1 s and
+     refresh every 30, where the full feed lags minutes behind. Both carry real
+     timestamps, so the five-minute rapid-fire rule runs on real data either
+     way - this only decides which copy is fresher. */
+  const todaySubs = Array.isArray(todayRows) ? todayRows : mtdSubs.filter(isToday);
 
   const { stores, districts } = buildCounts();
 
@@ -2385,7 +2593,7 @@ function render() {
   // today. From the rows when they exist, from the per-rep snapshot totals when
   // they do not — the same quantity either way.
   let repsToday = 0;
-  if (dataSource === 'snapshot') {
+  if (dataSource === 'snapshot' && !Array.isArray(todayRows)) {
     Object.keys(stores).forEach(n => Object.keys(stores[n].reps).forEach(r => {
       if (r !== '(unknown)' && stores[n].reps[r].today > 0) repsToday++;
     }));
@@ -2404,9 +2612,10 @@ function render() {
   // In snapshot mode the digest job already ran the identical rule (the window
   // and rule id are checked in snapshotFlagsUsable()), so the red names are the
   // same names — they are just precomputed.
-  rapidFlags = dataSource === 'snapshot'
-    ? rapidFlagsFromSnapshot(snapshotFlags)
-    : buildRapidFlags(todaySubs);
+  /* Always computed from real rows now. scope=today supplies them within a
+     second of load, so there is no longer a window where the page has counts
+     but no timestamps and has to fall back to precomputed flags. */
+  rapidFlags = buildRapidFlags(todaySubs);
   const legendEl = document.getElementById('flag-legend');
   if (legendEl) legendEl.classList.toggle('hidden', !rapidFlags.any);
 
@@ -2741,11 +2950,35 @@ function renderDailyGrid(mtdSubs) {
     counts[s] = new Array(numDays).fill(0);
   }));
 
-  mtdSubs.forEach(s => {
-    if (!counts[s.store]) return;
-    const i = dayDiff(new Date(s.timestamp), periodStart);
-    if (i >= 0 && i < numDays) counts[s.store][i]++;
-  });
+  if (historyDays) {
+    // Same source as the MTD figures above, so the grid can never disagree
+    // with the card that sits over it.
+    const startKey = dayKey(periodStart);
+    const endKey   = dayKey(cols[numDays - 1]);
+    const todayKey = dayKey(new Date());
+    const haveTodayRows = Array.isArray(todayRows);
+    eachHistory(startKey, endKey, (day, rawStore, _rep, n) => {
+      if (day === todayKey && haveTodayRows) return;
+      const name = normalizeStoreName(rawStore);
+      if (!counts[name]) return;
+      const i = dayDiff(dateFromKey(day), periodStart);
+      if (i >= 0 && i < numDays) counts[name][i] += n;
+    });
+    if (haveTodayRows) {
+      todayRows.forEach(s => {
+        const name = normalizeStoreName(s.store);
+        if (!counts[name]) return;
+        const i = dayDiff(new Date(s.timestamp), periodStart);
+        if (i >= 0 && i < numDays) counts[name][i]++;
+      });
+    }
+  } else {
+    mtdSubs.forEach(s => {
+      if (!counts[s.store]) return;
+      const i = dayDiff(new Date(s.timestamp), periodStart);
+      if (i >= 0 && i < numDays) counts[s.store][i]++;
+    });
+  }
 
   // Day totals across all stores
   const dayTotals = new Array(numDays).fill(0);
@@ -3231,6 +3464,30 @@ function buildLastMonthCounts() {
     stores[s] = { total: 0, reps: {} };
   }));
 
+  /* historyDays is not merely faster here, it is the only correct source.
+     The full feed returns the previous CALENDAR month; the fiscal cycle
+     starts on the 22nd, so the feed never carried the first ~10 days of
+     this window. On 2026-09-05 that was 4,004 submissions missing out of
+     12,618 - and it rendered as a confident 8,614. */
+  if (historyDays) {
+    const fromKey = dayKey(prevFiscalStart());
+    const toKey   = dayKey(fiscalLastDay(prevFiscalStart()));  // 21st, inclusive
+    eachHistory(fromKey, toKey, (_day, rawStore, rawRep, n) => {
+      const storeName = normalizeStoreName(rawStore);
+      if (!stores[storeName]) stores[storeName] = { total: 0, reps: {} };
+      const rep = String(rawRep || '').trim() || '(unknown)';
+      if (!stores[storeName].reps[rep]) stores[storeName].reps[rep] = { total: 0 };
+      stores[storeName].total += n;
+      stores[storeName].reps[rep].total += n;
+    });
+    const districtsAgg = DISTRICTS.map(d => {
+      let total = 0;
+      d.stores.forEach(s => { total += stores[s].total; });
+      return Object.assign({}, d, { total });
+    });
+    return { stores, districts: districtsAgg };
+  }
+
   submissions.forEach(s => {
     if (!isLastMonth(s)) return;
     // Normalize the raw submission label before bucketing. The live feed still
@@ -3400,15 +3657,21 @@ function escapeAttr(str) {
 updateTitleWithMonth();
 setInterval(updateTitleWithMonth, 60000); // refresh title every minute so it rolls over at midnight
 
-/* Boot (2026-09-03). Paint the empty shell first, so the tabs, search box and
-   headings are on screen and interactive immediately instead of after the feed.
-   Then fire the 11 KB snapshot and the 2.3 MB live feed at the same time: the
-   snapshot fills in real, labelled numbers in well under a second, the feed
-   replaces them ~15s later, and if the feed never arrives the snapshot is what
-   stops this page from being a wall of zeroes. loadSnapshot() checks
-   dataSource before it writes, so whichever finishes first, the live feed wins. */
+/* Boot (2026-09-05). Paint the empty shell first so the tabs, search box and
+   headings are interactive immediately, then go straight to live data.
+
+   The pre-aggregated snapshot bootstrap is GONE. It existed only because the
+   live feed took 11-15 s, which forced this page to show a stale, separately
+   labelled placeholder and a banner explaining it. scope=today answers in about
+   a second, so there is no longer a window a placeholder would fill - and Jeff
+   was explicit that he does not want one. loadSnapshot() is left defined but
+   uncalled: if the narrow endpoints ever regress, restoring the fallback is one
+   line, and deleting working code to prove a point helps nobody.
+
+   data/tsheet-counts.json is still produced and still matters - the rep-facing
+   quote sheets and the 12/3/6 digest read it. Only THIS page stopped depending
+   on it to paint. */
 render();
-loadSnapshot();
 fetchData();
 setInterval(fetchData, 30000);
 
