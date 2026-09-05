@@ -347,15 +347,32 @@
     white-space: nowrap;
   }
 
+  /* ── Row stat columns ─────────────────────────────────────────────────
+     A fixed-width GRID, not a flex row.
+
+     As flex, every row sized its own columns, so TODAY / MTD / TRAFFIC /
+     T-CHART % landed at a different x on each line depending on how long the
+     store name was and whether it carried a flag badge. The numbers never
+     lined up down the page, and on a phone the last column ran off the edge
+     entirely - "T-CHART %" wrapped onto three lines or was simply cut off.
+
+     A fixed track width means every row - district or store, indented or not,
+     flagged or not - puts its columns in exactly the same place. The fifth
+     track is the chevron: district rows have one, store rows do not, and
+     reserving the space either way is what keeps the two aligned with each
+     other. */
   .counts {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) 14px;
     align-items: center;
-    gap: 14px;
+    gap: 10px;
+    width: 296px;
+    flex: 0 0 auto;
   }
 
   .count {
     text-align: center;
-    min-width: 34px;
+    min-width: 0;
   }
 
   .count-value {
@@ -372,6 +389,9 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-top: 2px;
+    /* "T-CHART %" is the longest label and the one that used to wrap onto
+       three lines, which is what made the rows different heights. */
+    white-space: nowrap;
   }
 
   .chevron {
@@ -886,6 +906,62 @@
   }
   .daily-table tr.store-row:hover td:not(.col-total) { background: #141414; }
   .daily-table tr.store-row:hover td.col-total { background: #1f1f1f; }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     RESPONSIVE BLOCK - KEEP THIS LAST.
+     Several rules further up redefine the same properties (.store-header
+     re-declares its padding shorthand, which silently beat this block when
+     it sat higher in the file and left store columns 14px off from the
+     district row above them). Equal specificity means source order decides,
+     so anything added after this will override the phone layout.
+     ═══════════════════════════════════════════════════════════════════ */
+  /* ── Phones ───────────────────────────────────────────────────────────
+     Below this width there is not enough room for a name and four stat
+     columns side by side, so the name takes the first line and the stats get
+     the full width underneath. Because the stat block is then exactly the
+     same width on every row, the columns line up perfectly down the page -
+     which is the whole point. Nothing is hidden and nothing is truncated. */
+  @media (max-width: 620px) {
+    .district-header,
+    .store-header {
+      flex-wrap: wrap;
+      gap: 10px 12px;
+      padding: 12px 14px;
+    }
+    /* Store rows keep their visual indent on the NAME only. If the whole row
+       were indented, its stat block would start 6px right of the district row
+       above it and the columns would not line up - which is the thing being
+       fixed. Indent the label, align the numbers. */
+    .store-header { padding-left: 14px; }
+    .store-name { padding-left: 14px; }
+
+    .header-info,
+    .store-name { flex: 1 1 100%; min-width: 0; }
+
+    .counts {
+      width: 100%;
+      gap: 4px;
+      grid-template-columns: repeat(4, minmax(0, 1fr)) 12px;
+    }
+    .count-value { font-size: 16px; }
+    .count-label { font-size: 9px; letter-spacing: 0.2px; }
+    .chevron { width: 12px; font-size: 15px; }
+
+    /* The district meta line (DM + store count + flag note) has room to
+       breathe now that it owns a full line. */
+    .item-meta { white-space: normal; }
+
+    /* Two short lines beat one truncated one: "September T-Sheet Sub..." told
+       nobody anything. */
+    h1 { white-space: normal; overflow: visible; font-size: 16px; }
+    .header-top { align-items: flex-start; }
+
+    /* The tab strip already scrolls horizontally; tighter padding just fits
+       more of it on screen before anyone has to swipe. */
+    .tab { padding: 10px 12px; font-size: 13px; }
+    .header-inner { padding: 14px 14px 0; }
+    .container { padding-left: 14px; padding-right: 14px; }
+  }
 </style>
 <!-- Perf (2026-09-03): this tag carried no `defer`, so HTML parsing stopped
      dead here until blufoxmobile.github.io answered. Measured: stalling
@@ -2135,7 +2211,7 @@ function buildCounts() {
      shows up on the next poll rather than waiting for the next summary. */
   if (historyDays) {
     const fromKey  = dayKey(currentFiscalStart());
-    const toKey    = dayKey(fiscalEnd(currentFiscalStart()));
+    const toKey    = dayKey(fiscalLastDay(currentFiscalStart()));  // 21st, inclusive
     const todayKey = dayKey(new Date());
     const haveTodayRows = Array.isArray(todayRows);
 
@@ -3395,7 +3471,7 @@ function buildLastMonthCounts() {
      12,618 - and it rendered as a confident 8,614. */
   if (historyDays) {
     const fromKey = dayKey(prevFiscalStart());
-    const toKey   = dayKey(fiscalEnd(prevFiscalStart()));
+    const toKey   = dayKey(fiscalLastDay(prevFiscalStart()));  // 21st, inclusive
     eachHistory(fromKey, toKey, (_day, rawStore, rawRep, n) => {
       const storeName = normalizeStoreName(rawStore);
       if (!stores[storeName]) stores[storeName] = { total: 0, reps: {} };
