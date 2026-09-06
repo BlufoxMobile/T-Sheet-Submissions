@@ -347,15 +347,32 @@
     white-space: nowrap;
   }
 
+  /* ── Row stat columns ─────────────────────────────────────────────────
+     A fixed-width GRID, not a flex row.
+
+     As flex, every row sized its own columns, so TODAY / MTD / TRAFFIC /
+     T-CHART % landed at a different x on each line depending on how long the
+     store name was and whether it carried a flag badge. The numbers never
+     lined up down the page, and on a phone the last column ran off the edge
+     entirely - "T-CHART %" wrapped onto three lines or was simply cut off.
+
+     A fixed track width means every row - district or store, indented or not,
+     flagged or not - puts its columns in exactly the same place. The fifth
+     track is the chevron: district rows have one, store rows do not, and
+     reserving the space either way is what keeps the two aligned with each
+     other. */
   .counts {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) 14px;
     align-items: center;
-    gap: 14px;
+    gap: 10px;
+    width: 296px;
+    flex: 0 0 auto;
   }
 
   .count {
     text-align: center;
-    min-width: 34px;
+    min-width: 0;
   }
 
   .count-value {
@@ -372,6 +389,9 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-top: 2px;
+    /* "T-CHART %" is the longest label and the one that used to wrap onto
+       three lines, which is what made the rows different heights. */
+    white-space: nowrap;
   }
 
   .chevron {
@@ -886,6 +906,62 @@
   }
   .daily-table tr.store-row:hover td:not(.col-total) { background: #141414; }
   .daily-table tr.store-row:hover td.col-total { background: #1f1f1f; }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     RESPONSIVE BLOCK - KEEP THIS LAST.
+     Several rules further up redefine the same properties (.store-header
+     re-declares its padding shorthand, which silently beat this block when
+     it sat higher in the file and left store columns 14px off from the
+     district row above them). Equal specificity means source order decides,
+     so anything added after this will override the phone layout.
+     ═══════════════════════════════════════════════════════════════════ */
+  /* ── Phones ───────────────────────────────────────────────────────────
+     Below this width there is not enough room for a name and four stat
+     columns side by side, so the name takes the first line and the stats get
+     the full width underneath. Because the stat block is then exactly the
+     same width on every row, the columns line up perfectly down the page -
+     which is the whole point. Nothing is hidden and nothing is truncated. */
+  @media (max-width: 620px) {
+    .district-header,
+    .store-header {
+      flex-wrap: wrap;
+      gap: 10px 12px;
+      padding: 12px 14px;
+    }
+    /* Store rows keep their visual indent on the NAME only. If the whole row
+       were indented, its stat block would start 6px right of the district row
+       above it and the columns would not line up - which is the thing being
+       fixed. Indent the label, align the numbers. */
+    .store-header { padding-left: 14px; }
+    .store-name { padding-left: 14px; }
+
+    .header-info,
+    .store-name { flex: 1 1 100%; min-width: 0; }
+
+    .counts {
+      width: 100%;
+      gap: 4px;
+      grid-template-columns: repeat(4, minmax(0, 1fr)) 12px;
+    }
+    .count-value { font-size: 16px; }
+    .count-label { font-size: 9px; letter-spacing: 0.2px; }
+    .chevron { width: 12px; font-size: 15px; }
+
+    /* The district meta line (DM + store count + flag note) has room to
+       breathe now that it owns a full line. */
+    .item-meta { white-space: normal; }
+
+    /* Two short lines beat one truncated one: "September T-Sheet Sub..." told
+       nobody anything. */
+    h1 { white-space: normal; overflow: visible; font-size: 16px; }
+    .header-top { align-items: flex-start; }
+
+    /* The tab strip already scrolls horizontally; tighter padding just fits
+       more of it on screen before anyone has to swipe. */
+    .tab { padding: 10px 12px; font-size: 13px; }
+    .header-inner { padding: 14px 14px 0; }
+    .container { padding-left: 14px; padding-right: 14px; }
+  }
 </style>
 <!-- Perf (2026-09-03): this tag carried no `defer`, so HTML parsing stopped
      dead here until blufoxmobile.github.io answered. Measured: stalling
@@ -1503,6 +1579,51 @@ let pendingRender = false;
                 never goes back: a later feed FAILURE leaves the last good live
                 numbers up rather than reverting to older snapshot ones. */
 let dataSource = 'none';
+
+/* ── LIVE AGGREGATE SOURCES (2026-09-05) ───────────────────────────────
+   This page used to pull the ENTIRE feed - 2.4 MB, 14,000+ rows, 11-15 s -
+   every 30 seconds, from every open tab. The execution log showed doGet
+   firing every 1-3 seconds with four or more running at once: roughly
+   60 MB a minute off one Apps Script, to display counts. That single fact
+   caused everything people complained about here - the slow load, the
+   placeholder snapshot, the staleness banner, and the intermittent 404s.
+
+   Two narrow endpoints replace it:
+     scope=today    3.5 KB, ~1 s. Real rows with real timestamps, so the
+                    five-minute rapid-fire rule still runs on actual data.
+     scope=summary  per day/store/rep counts for the previous AND current
+                    fiscal cycle. Every historical view here needs sums,
+                    not rows.
+
+   The full feed still loads, but quietly in the background and at most
+   every FULL_REFRESH_MS - only so that clicking into a PAST day can still
+   show individual submissions. Nothing on the 30-second path touches it.
+
+   historyDays is also more CORRECT than the full feed, not just smaller:
+   the feed returns the previous calendar month, while the fiscal cycle
+   starts on the 22nd, so it was missing the first ~10 days of every "last
+   month" - 4,004 submissions on 2026-09-05, a 32% undercount that looked
+   like a real number. Prefer historyDays wherever both exist. */
+const TODAY_URL       = APPS_SCRIPT_URL + '?scope=today';
+const SUMMARY_URL     = APPS_SCRIPT_URL + '?scope=summary';
+const FULL_REFRESH_MS = 10 * 60 * 1000;
+
+let todayRows   = null;  // scope=today rows, store names normalized
+let historyDays = null;  // scope=summary: { 'YYYY-MM-DD': { store: { rep: n } } }
+let lastFullAt  = 0;     // Date.now() of the last full-feed fetch
+
+/* What buildCounts() was actually able to source, set on every call.
+   render() reads these to decide between a number and an em-dash.
+
+   THIS EXISTS BECAUSE OF A REAL OUTAGE. On 2026-09-05 a build shipped where
+   buildCounts() only consulted todayRows inside its historyDays branch. When
+   today landed but the slower summary did not, it fell through to scanning
+   `submissions` - empty, because the full feed is now a background fetch - and
+   the page rendered TODAY 0 / MTD 0 while holding 381 real rows. A live-looking
+   dashboard reporting that nobody submitted anything is worse than no dashboard.
+   Never infer "zero" from "not loaded yet". */
+let knownToday = false;
+let knownMtd   = false;
 let snapshotCounts = null;   // parsed tsheet-counts.json, validated
 let snapshotFlags = null;    // parsed tsheet-flags.json, validated
 let snapshotAt = '';         // generated_at of whichever snapshot is showing
@@ -1603,12 +1724,16 @@ async function loadSnapshot() {
       fetchJson(SNAPSHOT_FLAGS_URL, { timeout: 6000, retries: 0 }).catch(() => null)
     ]);
     if (!snapshotIsCurrent(counts)) return;
-    // The live feed got there first — never step on it.
-    if (dataSource === 'live') return;
+    /* ALWAYS keep the data, even if the live feed got here first. This file is
+       the MTD source until scope=summary lands (~20 s), and summary is the slow
+       one. Returning early once dataSource flipped to 'live' would throw the
+       fast MTD source away at exactly the moment it is still needed - a race
+       that depends only on which fetch happens to win. Only the dataSource
+       LABEL defers to the live feed. */
     snapshotCounts = counts;
     snapshotFlags = snapshotFlagsUsable(flags) ? flags : null;
     snapshotAt = String(counts.generated_at || '');
-    dataSource = 'snapshot';
+    if (dataSource !== 'live') dataSource = 'snapshot';
     safeStorage.set('tss:lastSnapshotAt', snapshotAt);
     if (!isModalOpen()) render(); else pendingRender = true;
     setFeedBanner();
@@ -1631,7 +1756,7 @@ function setFeedBanner() {
      what IS on screen instead. */
   if (footer && dataSource !== 'live') {
     footer.textContent = dataSource === 'snapshot'
-      ? 'Snapshot totals from ' + snapshotStamp() + (feedError ? ' — live feed unavailable' : ' — live feed still loading')
+      ? 'Totals as of ' + snapshotStamp() + (feedError ? ' — live feed unavailable' : ' — today updating…')
       : (feedError ? 'T-sheet feed unavailable — retrying automatically' : 'Loading…');
   }
 
@@ -1648,13 +1773,16 @@ function setFeedBanner() {
       return;
     }
     if (dataSource === 'snapshot') {
-      el.className = 'feed-banner';
-      el.innerHTML = '<span class="feed-banner-head">Snapshot</span>' +
-        '<span class="feed-banner-msg">Showing the <b>' + htmlEscape(snapshotStamp()) +
-        '</b> pre-aggregated snapshot while the live t-sheet feed loads. ' +
-        'Daily grid and per-submission detail fill in when it arrives.</span>';
+      /* The counts file is current - snapshotIsCurrent() refuses it unless its
+         day and fiscal cycle match today - and today's live rows are only a few
+         seconds behind. That does not warrant a banner sitting over the numbers;
+         Jeff asked specifically not to see one. Keep it to the footer and a
+         loading dot. The error branch below still shouts when something is
+         actually wrong. */
+      el.className = 'feed-banner hidden';
+      el.innerHTML = '';
       if (dot) dot.className = 'status-dot loading';
-      if (statusText) statusText.textContent = 'Snapshot';
+      if (statusText) statusText.textContent = 'Loading';
       return;
     }
     el.className = 'feed-banner hidden';
@@ -1764,15 +1892,16 @@ async function fetchData(isManual = false) {
   // T-SHEETS — the only source whose failure the user needs to hear about.
   // Retries once with backoff first: two of nine digest runs against this exact
   // endpoint 404'd on 2026-09-03 and succeeded on the next attempt.
-  const tSheetReq = directoryReq
-    .then(() => fetchJson(APPS_SCRIPT_URL + '?t=' + Date.now(), { retries: 1 }))
+  /* TODAY - the live path. 3.5 KB, ~1 s, every poll. This is what makes the
+     page live and what removed the need for a placeholder snapshot. */
+  const todayReq = directoryReq
+    .then(() => fetchJson(TODAY_URL + '&t=' + Date.now(), { retries: 1 }))
     .then(data => {
-      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'feed reported failure');
-      submissions = data.submissions || [];
-      // Normalize main T-Sheet store names so legacy variants like the pre-2026
-      // "Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
-      submissions.forEach(s => { s.store = normalizeStoreName(s.store); });
-      dataSource = 'live';
+      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'today feed reported failure');
+      const rows = data.submissions || [];
+      rows.forEach(s => { s.store = normalizeStoreName(s.store); });
+      todayRows = rows;
+      if (dataSource !== 'live') dataSource = 'live';
       feedError = '';
       const now = new Date();
       document.getElementById('last-updated').textContent =
@@ -1780,14 +1909,42 @@ async function fetchData(isManual = false) {
       paint();
     })
     .catch(err => {
-      // Message, not stack: this string goes in front of a district manager.
       feedError = String((err && err.message) || err);
-      console.error('t-sheet feed failed', err);
-      document.getElementById('last-updated').textContent =
-        dataSource === 'live'
-          ? 'Last sync failed — showing the previous sync'
-          : 'T-sheet feed unavailable — retrying automatically';
+      console.error('today feed failed', err);
       paint();
+    });
+
+  /* HISTORY - MTD, the daily grid and Last Month. Counts only, one fetch,
+     and the only source that covers the fiscal window completely. */
+  const summaryReq = directoryReq
+    .then(() => fetchJson(SUMMARY_URL + '&t=' + Date.now(), { retries: 1 }))
+    .then(data => {
+      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'summary reported failure');
+      historyDays = data.days || null;
+      if (historyDays && dataSource !== 'live') dataSource = 'live';
+      paint();
+    })
+    .catch(err => { console.error('summary feed failed', err); });
+
+  /* FULL FEED - individual rows for PAST days, so the daily-grid modals keep
+     working. Background only, at most every FULL_REFRESH_MS, and never on the
+     30-second path: this is the 2.4 MB request that was flooding the script. */
+  const needFull = submissions.length === 0 || (Date.now() - lastFullAt) > FULL_REFRESH_MS;
+  const tSheetReq = !needFull ? Promise.resolve() : directoryReq
+    .then(() => { lastFullAt = Date.now(); return fetchJson(APPS_SCRIPT_URL + '?t=' + Date.now(), { retries: 1 }); })
+    .then(data => {
+      if (!data || !data.success) throw new Error(data && data.error ? data.error : 'feed reported failure');
+      submissions = data.submissions || [];
+      // Normalize main T-Sheet store names so legacy variants like the pre-2026
+      // "Skokie Xfinity Store" roll up into the canonical DISTRICTS store.
+      submissions.forEach(s => { s.store = normalizeStoreName(s.store); });
+      dataSource = 'live';
+      paint();
+    })
+    .catch(err => {
+      // Background only: today and history already painted, so a failure here
+      // costs past-day drill-down and nothing the user is looking at.
+      console.warn('background full feed failed (past-day detail unavailable)', err);
     });
 
   // INTERNET QUOTE SHEETS — a second ~837 KB Apps Script deployment on the same
@@ -1825,7 +1982,7 @@ async function fetchData(isManual = false) {
 
   // Resolves when everything has settled, so retryFeed() can re-enable its
   // button at the right moment. Nothing on screen waits for this.
-  await Promise.all([tSheetReq, quoteReq, trafficReq, directoryReq.catch(() => null)]);
+  await Promise.all([todayReq, summaryReq, tSheetReq, quoteReq, trafficReq, directoryReq.catch(() => null)]);
 }
 
 /* Every stream calls this instead of render(). Keeps the "never rebuild under an
@@ -2004,7 +2161,140 @@ function lastMonthLabel() { return fiscalLabel(prevFiscalStart()); }
 
 function isToday(s) { return submissionDayKey(s) === todayKey(); }
 
+/* ── day-key helpers ───────────────────────────────────────────────────
+   scope=summary keys days as yyyy-MM-dd in America/Chicago, which is the
+   business day these stores actually work. The helpers below convert
+   between those keys and the local Date objects the fiscal-window code
+   already uses, so both representations can be mixed without either one
+   silently reinterpreting a day boundary. */
+function dayKey(d) {
+  return d.getFullYear() + '-' +
+         String(d.getMonth() + 1).padStart(2, '0') + '-' +
+         String(d.getDate()).padStart(2, '0');
+}
+function dateFromKey(k) {
+  return new Date(Number(k.slice(0, 4)), Number(k.slice(5, 7)) - 1, Number(k.slice(8, 10)));
+}
+/* Walk every (day, store, rep, count) in historyDays inside [fromKey, toKey]. */
+function eachHistory(fromKey, toKey, fn) {
+  if (!historyDays) return;
+  Object.keys(historyDays).forEach(day => {
+    if (day < fromKey || day > toKey) return;
+    const byStore = historyDays[day];
+    Object.keys(byStore).forEach(store => {
+      const byRep = byStore[store];
+      Object.keys(byRep).forEach(rep => fn(day, store, rep, Number(byRep[rep]) || 0));
+    });
+  });
+}
+
+/* Per-store/per-rep counts, assembled from whichever sources have arrived.
+
+   SOURCE PRECEDENCE - fastest correct source wins, and each number is sourced
+   independently so a slow one never blanks a fast one:
+
+     today   todayRows (scope=today, ~4 s, refreshed every 30 s)
+             -> countsFile today   (data/tsheet-counts.json, ~11 KB, instant,
+                                    rebuilt every 5 min, validated same-day)
+             -> submissions filtered to today (full feed, background)
+     mtd     historyDays (scope=summary, ~20 s, whole fiscal cycle)
+             -> countsFile mtd
+             -> submissions filtered to the cycle
+
+   When today comes from live rows but mtd came from the counts file, mtd is
+   ADJUSTED by the difference so the two agree: mtd - file.today + live.today.
+   Otherwise MTD silently lags TODAY by up to five minutes and the numbers on
+   one screen contradict each other. */
 function buildCounts() {
+  const stores = {};
+  DISTRICTS.forEach(d => d.stores.forEach(s => {
+    stores[s] = { today: 0, mtd: 0, traffic: trafficByStore[s] || 0, reps: {} };
+  }));
+
+  const bucket = (name) => {
+    if (!stores[name]) stores[name] = { today: 0, mtd: 0, traffic: trafficByStore[name] || 0, reps: {} };
+    return stores[name];
+  };
+  const repBucket = (st, rep) => {
+    const key = String(rep || '').trim() || '(unknown)';
+    if (!st.reps[key]) st.reps[key] = { today: 0, mtd: 0 };
+    return st.reps[key];
+  };
+  const rollUp = () => DISTRICTS.map(d => {
+    let today = 0, mtd = 0, traffic = 0;
+    d.stores.forEach(sName => {
+      today += stores[sName].today; mtd += stores[sName].mtd; traffic += stores[sName].traffic || 0;
+    });
+    return Object.assign({}, d, { today, mtd, traffic });
+  });
+
+  const haveHistory = !!historyDays;
+  const haveToday   = Array.isArray(todayRows);
+  const haveCounts  = !!(snapshotCounts && snapshotCounts.stores);
+  const haveRows    = submissions.length > 0;
+  const todayK      = dayKey(new Date());
+
+  // ---- MTD ------------------------------------------------------------
+  if (haveHistory) {
+    const fromK = dayKey(currentFiscalStart());
+    const toK   = dayKey(fiscalLastDay(currentFiscalStart()));   // the 21st, inclusive
+    eachHistory(fromK, toK, (day, rawStore, rawRep, n) => {
+      if (day === todayK && haveToday) return;                   // live rows win for today
+      const st = bucket(normalizeStoreName(rawStore));
+      const rb = repBucket(st, rawRep);
+      st.mtd += n; rb.mtd += n;
+      if (day === todayK) { st.today += n; rb.today += n; }
+    });
+    knownMtd = true;
+  } else if (haveCounts) {
+    Object.keys(snapshotCounts.stores).forEach(raw => {
+      const src = snapshotCounts.stores[raw] || {};
+      const st  = bucket(normalizeStoreName(raw));
+      st.mtd += Number(src.mtd) || 0;
+      if (!haveToday) st.today += Number(src.today) || 0;
+      const reps = src.reps || {};
+      Object.keys(reps).forEach(rep => {
+        const rb = repBucket(st, rep);
+        rb.mtd += Number(reps[rep].mtd) || 0;
+        if (!haveToday) rb.today += Number(reps[rep].today) || 0;
+      });
+      // Live rows supersede the file's today; keep mtd consistent with them.
+      if (haveToday) {
+        st.mtd -= Number(src.today) || 0;
+        Object.keys(reps).forEach(rep => { repBucket(st, rep).mtd -= Number(reps[rep].today) || 0; });
+      }
+    });
+    knownMtd = true;
+  } else if (haveRows) {
+    submissions.forEach(sub => {
+      if (!isThisMonth(sub)) return;
+      const st = bucket(normalizeStoreName(sub.store));
+      const rb = repBucket(st, sub.rep_name);
+      st.mtd++; rb.mtd++;
+      if (!haveToday && isToday(sub)) { st.today++; rb.today++; }
+    });
+    knownMtd = true;
+  } else {
+    knownMtd = false;
+  }
+
+  // ---- TODAY ----------------------------------------------------------
+  if (haveToday) {
+    todayRows.forEach(sub => {
+      const st = bucket(normalizeStoreName(sub.store));
+      const rb = repBucket(st, sub.rep_name);
+      st.today++; rb.today++;
+      if (knownMtd) { st.mtd++; rb.mtd++; }
+    });
+    knownToday = true;
+  } else {
+    knownToday = haveHistory || haveCounts || haveRows;
+  }
+
+  return { stores, districts: rollUp() };
+}
+
+function buildCountsLegacy() {
   const stores = {};
   DISTRICTS.forEach(d => d.stores.forEach(s => {
     stores[s] = { today: 0, mtd: 0, traffic: trafficByStore[s] || 0, reps: {} };
@@ -2039,6 +2329,46 @@ function buildCounts() {
       return Object.assign({}, d, { today, mtd, traffic });
     });
     return { stores, districts };
+  }
+
+  /* Aggregate path (2026-09-05). historyDays covers the whole fiscal cycle
+     and is fetched in ~1 s; todayRows carries today at 30-second freshness.
+     Today is taken from the ROWS, not from the summary, so a submission
+     shows up on the next poll rather than waiting for the next summary. */
+  if (historyDays) {
+    const fromKey  = dayKey(currentFiscalStart());
+    const toKey    = dayKey(fiscalLastDay(currentFiscalStart()));  // 21st, inclusive
+    const todayKey = dayKey(new Date());
+    const haveTodayRows = Array.isArray(todayRows);
+
+    eachHistory(fromKey, toKey, (day, rawStore, rawRep, n) => {
+      if (day === todayKey && haveTodayRows) return;  // rows win for today
+      const name = normalizeStoreName(rawStore);
+      if (!stores[name]) stores[name] = { today: 0, mtd: 0, traffic: trafficByStore[name] || 0, reps: {} };
+      const rep = String(rawRep || '').trim() || '(unknown)';
+      if (!stores[name].reps[rep]) stores[name].reps[rep] = { today: 0, mtd: 0 };
+      stores[name].mtd += n;
+      stores[name].reps[rep].mtd += n;
+      if (day === todayKey) { stores[name].today += n; stores[name].reps[rep].today += n; }
+    });
+
+    if (haveTodayRows) {
+      todayRows.forEach(s => {
+        const name = normalizeStoreName(s.store);
+        if (!stores[name]) stores[name] = { today: 0, mtd: 0, traffic: trafficByStore[name] || 0, reps: {} };
+        const rep = String(s.rep_name || '').trim() || '(unknown)';
+        if (!stores[name].reps[rep]) stores[name].reps[rep] = { today: 0, mtd: 0 };
+        stores[name].mtd++; stores[name].today++;
+        stores[name].reps[rep].mtd++; stores[name].reps[rep].today++;
+      });
+    }
+
+    const districtsAgg = DISTRICTS.map(d => {
+      let today = 0, mtd = 0, traffic = 0;
+      d.stores.forEach(s => { today += stores[s].today; mtd += stores[s].mtd; traffic += stores[s].traffic || 0; });
+      return Object.assign({}, d, { today, mtd, traffic });
+    });
+    return { stores, districts: districtsAgg };
   }
 
   submissions.forEach(s => {
@@ -2353,7 +2683,11 @@ function isModalOpen() {
 function render() {
   const openSections = captureExpanded();
   const mtdSubs = submissions.filter(isThisMonth);
-  const todaySubs = mtdSubs.filter(isToday);
+  /* Today comes from scope=today when it is in: those rows arrive in ~1 s and
+     refresh every 30, where the full feed lags minutes behind. Both carry real
+     timestamps, so the five-minute rapid-fire rule runs on real data either
+     way - this only decides which copy is fresher. */
+  const todaySubs = Array.isArray(todayRows) ? todayRows : mtdSubs.filter(isToday);
 
   const { stores, districts } = buildCounts();
 
@@ -2361,11 +2695,16 @@ function render() {
      six stat cards agree with the district totals underneath them whichever
      source is live - and so that a page with NO data shows "—" instead of the
      confident "0" that used to make a dead feed look like a quiet day. */
+  /* knownToday / knownMtd come from buildCounts() and say whether ANY source
+     actually supplied that figure. `dataSource !== 'none'` is not enough: the
+     page can be genuinely live on today's rows while the totals source has not
+     landed, and printing 0 there is how a working dashboard tells five district
+     managers that nobody has submitted all day. */
   const haveData = dataSource !== 'none';
   const totalToday = districts.reduce((a, d) => a + d.today, 0);
   const totalMtd   = districts.reduce((a, d) => a + d.mtd, 0);
-  document.getElementById('stat-today').textContent = haveData ? totalToday : '—';
-  document.getElementById('stat-mtd').textContent   = haveData ? totalMtd : '—';
+  document.getElementById('stat-today').textContent = (haveData && knownToday) ? totalToday : '—';
+  document.getElementById('stat-mtd').textContent   = (haveData && knownMtd)   ? totalMtd   : '—';
   // Spell the fiscal window out so nobody reads "MTD" as the calendar month.
   const mtdSubEl = document.getElementById('stat-mtd-sub');
   if (mtdSubEl) mtdSubEl.textContent = fiscalRangeLabel(currentFiscalStart());
@@ -2385,7 +2724,7 @@ function render() {
   // today. From the rows when they exist, from the per-rep snapshot totals when
   // they do not — the same quantity either way.
   let repsToday = 0;
-  if (dataSource === 'snapshot') {
+  if (!Array.isArray(todayRows) && !submissions.length && snapshotCounts) {
     Object.keys(stores).forEach(n => Object.keys(stores[n].reps).forEach(r => {
       if (r !== '(unknown)' && stores[n].reps[r].today > 0) repsToday++;
     }));
@@ -2404,9 +2743,12 @@ function render() {
   // In snapshot mode the digest job already ran the identical rule (the window
   // and rule id are checked in snapshotFlagsUsable()), so the red names are the
   // same names — they are just precomputed.
-  rapidFlags = dataSource === 'snapshot'
-    ? rapidFlagsFromSnapshot(snapshotFlags)
-    : buildRapidFlags(todaySubs);
+  /* Live rows when we have them; otherwise the digest job's precomputed flags,
+     which snapshotFlagsUsable() checks were produced by this exact rule and
+     window. Never leave the red names off just because scope=today is slow. */
+  rapidFlags = (Array.isArray(todayRows) || submissions.length)
+    ? buildRapidFlags(todaySubs)
+    : rapidFlagsFromSnapshot(snapshotFlags);
   const legendEl = document.getElementById('flag-legend');
   if (legendEl) legendEl.classList.toggle('hidden', !rapidFlags.any);
 
@@ -2741,11 +3083,35 @@ function renderDailyGrid(mtdSubs) {
     counts[s] = new Array(numDays).fill(0);
   }));
 
-  mtdSubs.forEach(s => {
-    if (!counts[s.store]) return;
-    const i = dayDiff(new Date(s.timestamp), periodStart);
-    if (i >= 0 && i < numDays) counts[s.store][i]++;
-  });
+  if (historyDays) {
+    // Same source as the MTD figures above, so the grid can never disagree
+    // with the card that sits over it.
+    const startKey = dayKey(periodStart);
+    const endKey   = dayKey(cols[numDays - 1]);
+    const todayKey = dayKey(new Date());
+    const haveTodayRows = Array.isArray(todayRows);
+    eachHistory(startKey, endKey, (day, rawStore, _rep, n) => {
+      if (day === todayKey && haveTodayRows) return;
+      const name = normalizeStoreName(rawStore);
+      if (!counts[name]) return;
+      const i = dayDiff(dateFromKey(day), periodStart);
+      if (i >= 0 && i < numDays) counts[name][i] += n;
+    });
+    if (haveTodayRows) {
+      todayRows.forEach(s => {
+        const name = normalizeStoreName(s.store);
+        if (!counts[name]) return;
+        const i = dayDiff(new Date(s.timestamp), periodStart);
+        if (i >= 0 && i < numDays) counts[name][i]++;
+      });
+    }
+  } else {
+    mtdSubs.forEach(s => {
+      if (!counts[s.store]) return;
+      const i = dayDiff(new Date(s.timestamp), periodStart);
+      if (i >= 0 && i < numDays) counts[s.store][i]++;
+    });
+  }
 
   // Day totals across all stores
   const dayTotals = new Array(numDays).fill(0);
@@ -3231,6 +3597,30 @@ function buildLastMonthCounts() {
     stores[s] = { total: 0, reps: {} };
   }));
 
+  /* historyDays is not merely faster here, it is the only correct source.
+     The full feed returns the previous CALENDAR month; the fiscal cycle
+     starts on the 22nd, so the feed never carried the first ~10 days of
+     this window. On 2026-09-05 that was 4,004 submissions missing out of
+     12,618 - and it rendered as a confident 8,614. */
+  if (historyDays) {
+    const fromKey = dayKey(prevFiscalStart());
+    const toKey   = dayKey(fiscalLastDay(prevFiscalStart()));  // 21st, inclusive
+    eachHistory(fromKey, toKey, (_day, rawStore, rawRep, n) => {
+      const storeName = normalizeStoreName(rawStore);
+      if (!stores[storeName]) stores[storeName] = { total: 0, reps: {} };
+      const rep = String(rawRep || '').trim() || '(unknown)';
+      if (!stores[storeName].reps[rep]) stores[storeName].reps[rep] = { total: 0 };
+      stores[storeName].total += n;
+      stores[storeName].reps[rep].total += n;
+    });
+    const districtsAgg = DISTRICTS.map(d => {
+      let total = 0;
+      d.stores.forEach(s => { total += stores[s].total; });
+      return Object.assign({}, d, { total });
+    });
+    return { stores, districts: districtsAgg };
+  }
+
   submissions.forEach(s => {
     if (!isLastMonth(s)) return;
     // Normalize the raw submission label before bucketing. The live feed still
@@ -3267,34 +3657,65 @@ function renderLastMonthView() {
 
   const archived = submissions.filter(isLastMonth);
 
-  // Best single day in the archived month
-  const dayCounts = {};
-  archived.forEach(s => {
-    const d = new Date(s.timestamp);
-    const k = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
-    dayCounts[k] = (dayCounts[k] || 0) + 1;
-  });
-  const bestDay = Object.values(dayCounts).reduce((m, v) => Math.max(m, v), 0);
+  /* The three headline stats MUST come from the same source as the store/rep
+     grid below them, or the page contradicts itself in public.
 
-  // Distinct reps who submitted at all last month
-  const repSet = new Set();
-  archived.forEach(s => {
-    const rep = String(s.rep_name || '').trim();
-    if (rep) repSet.add(rep + '|' + s.store);
-  });
+     `archived` is the full feed filtered to the fiscal window, but the feed
+     only carries the previous CALENDAR month - it has nothing before the 1st,
+     while the fiscal window opens on the 22nd. buildLastMonthCounts() was
+     fixed to read historyDays; this block was not, so on 2026-09-06 the card
+     read "AUGUST 2026 TOTAL 8,614" directly above five district rows summing
+     to 12,618. Whichever number a DM quoted, one of them was wrong.
+
+     historyDays is authoritative when present. `archived` is the fallback,
+     and when neither has landed the stats show an em-dash rather than a
+     confident zero. */
+  let lmTotal = null, lmRepCount = null, lmBest = null;
+
+  if (historyDays) {
+    const fromKey = dayKey(prevStart);
+    const toKey   = dayKey(fiscalLastDay(prevStart));   // the 21st, inclusive
+    const hDayTotals = {};
+    const hRepSet = new Set();
+    let hTotal = 0;
+    eachHistory(fromKey, toKey, (day, rawStore, rawRep, n) => {
+      hTotal += n;
+      hDayTotals[day] = (hDayTotals[day] || 0) + n;
+      const rep = String(rawRep || '').trim();
+      if (rep) hRepSet.add(rep + '|' + normalizeStoreName(rawStore));
+    });
+    lmTotal    = hTotal;
+    lmRepCount = hRepSet.size;
+    lmBest     = Object.values(hDayTotals).reduce((m, v) => Math.max(m, v), 0);
+  } else if (archived.length) {
+    const dayCounts = {};
+    const repSet = new Set();
+    archived.forEach(s => {
+      const d = new Date(s.timestamp);
+      const k = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+      dayCounts[k] = (dayCounts[k] || 0) + 1;
+      const rep = String(s.rep_name || '').trim();
+      if (rep) repSet.add(rep + '|' + normalizeStoreName(s.store));
+    });
+    lmTotal    = archived.length;
+    lmRepCount = repSet.size;
+    lmBest     = Object.values(dayCounts).reduce((m, v) => Math.max(m, v), 0);
+  }
 
   const totalEl = document.getElementById('last-month-stat-total');
   const repsEl  = document.getElementById('last-month-stat-reps');
   const bestEl  = document.getElementById('last-month-stat-best');
-  if (totalEl) totalEl.textContent = archived.length;
-  if (repsEl)  repsEl.textContent  = repSet.size;
-  if (bestEl)  bestEl.textContent  = bestDay;
+  if (totalEl) totalEl.textContent = lmTotal    === null ? '\u2014' : lmTotal;
+  if (repsEl)  repsEl.textContent  = lmRepCount === null ? '\u2014' : lmRepCount;
+  if (bestEl)  bestEl.textContent  = lmBest     === null ? '\u2014' : lmBest;
 
   const el = document.getElementById('last-month-breakdown');
   const emptyEl = document.getElementById('last-month-empty');
   if (!el) return;
 
-  if (archived.length === 0) {
+  /* Do not declare the month empty just because the background feed has not
+     landed. historyDays alone is enough to render the whole view. */
+  if (!lmTotal) {
     el.innerHTML = '';
     if (emptyEl) emptyEl.classList.remove('hidden');
     return;
@@ -3400,13 +3821,22 @@ function escapeAttr(str) {
 updateTitleWithMonth();
 setInterval(updateTitleWithMonth, 60000); // refresh title every minute so it rolls over at midnight
 
-/* Boot (2026-09-03). Paint the empty shell first, so the tabs, search box and
-   headings are on screen and interactive immediately instead of after the feed.
-   Then fire the 11 KB snapshot and the 2.3 MB live feed at the same time: the
-   snapshot fills in real, labelled numbers in well under a second, the feed
-   replaces them ~15s later, and if the feed never arrives the snapshot is what
-   stops this page from being a wall of zeroes. loadSnapshot() checks
-   dataSource before it writes, so whichever finishes first, the live feed wins. */
+/* Boot (2026-09-05). Paint the empty shell first so the tabs, search box and
+   headings are interactive immediately, then go straight to live data.
+
+   data/tsheet-counts.json loads in parallel, and it is a DATA SOURCE, not a
+   placeholder. It is ~11 KB, arrives instantly, is rebuilt every five minutes,
+   and snapshotIsCurrent() refuses it unless its day and fiscal cycle match
+   today - so it is the fastest correct source for MTD, which scope=summary
+   takes ~20 s to produce.
+
+   It was removed entirely in an earlier build on the reasoning that scope=today
+   made a placeholder unnecessary. That was half right: today no longer needs a
+   placeholder, but MTD still does, and with nothing to fall back on the page
+   rendered zeroes the first time the Apps Script timed out. What Jeff objected
+   to was a stale snapshot BANNER sitting over the numbers - not the file. So
+   the file stays as a source and the banner only appears when something is
+   genuinely wrong (see setFeedBanner). */
 render();
 loadSnapshot();
 fetchData();
