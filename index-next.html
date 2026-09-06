@@ -3657,34 +3657,65 @@ function renderLastMonthView() {
 
   const archived = submissions.filter(isLastMonth);
 
-  // Best single day in the archived month
-  const dayCounts = {};
-  archived.forEach(s => {
-    const d = new Date(s.timestamp);
-    const k = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
-    dayCounts[k] = (dayCounts[k] || 0) + 1;
-  });
-  const bestDay = Object.values(dayCounts).reduce((m, v) => Math.max(m, v), 0);
+  /* The three headline stats MUST come from the same source as the store/rep
+     grid below them, or the page contradicts itself in public.
 
-  // Distinct reps who submitted at all last month
-  const repSet = new Set();
-  archived.forEach(s => {
-    const rep = String(s.rep_name || '').trim();
-    if (rep) repSet.add(rep + '|' + s.store);
-  });
+     `archived` is the full feed filtered to the fiscal window, but the feed
+     only carries the previous CALENDAR month - it has nothing before the 1st,
+     while the fiscal window opens on the 22nd. buildLastMonthCounts() was
+     fixed to read historyDays; this block was not, so on 2026-09-06 the card
+     read "AUGUST 2026 TOTAL 8,614" directly above five district rows summing
+     to 12,618. Whichever number a DM quoted, one of them was wrong.
+
+     historyDays is authoritative when present. `archived` is the fallback,
+     and when neither has landed the stats show an em-dash rather than a
+     confident zero. */
+  let lmTotal = null, lmRepCount = null, lmBest = null;
+
+  if (historyDays) {
+    const fromKey = dayKey(prevStart);
+    const toKey   = dayKey(fiscalLastDay(prevStart));   // the 21st, inclusive
+    const hDayTotals = {};
+    const hRepSet = new Set();
+    let hTotal = 0;
+    eachHistory(fromKey, toKey, (day, rawStore, rawRep, n) => {
+      hTotal += n;
+      hDayTotals[day] = (hDayTotals[day] || 0) + n;
+      const rep = String(rawRep || '').trim();
+      if (rep) hRepSet.add(rep + '|' + normalizeStoreName(rawStore));
+    });
+    lmTotal    = hTotal;
+    lmRepCount = hRepSet.size;
+    lmBest     = Object.values(hDayTotals).reduce((m, v) => Math.max(m, v), 0);
+  } else if (archived.length) {
+    const dayCounts = {};
+    const repSet = new Set();
+    archived.forEach(s => {
+      const d = new Date(s.timestamp);
+      const k = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+      dayCounts[k] = (dayCounts[k] || 0) + 1;
+      const rep = String(s.rep_name || '').trim();
+      if (rep) repSet.add(rep + '|' + normalizeStoreName(s.store));
+    });
+    lmTotal    = archived.length;
+    lmRepCount = repSet.size;
+    lmBest     = Object.values(dayCounts).reduce((m, v) => Math.max(m, v), 0);
+  }
 
   const totalEl = document.getElementById('last-month-stat-total');
   const repsEl  = document.getElementById('last-month-stat-reps');
   const bestEl  = document.getElementById('last-month-stat-best');
-  if (totalEl) totalEl.textContent = archived.length;
-  if (repsEl)  repsEl.textContent  = repSet.size;
-  if (bestEl)  bestEl.textContent  = bestDay;
+  if (totalEl) totalEl.textContent = lmTotal    === null ? '\u2014' : lmTotal;
+  if (repsEl)  repsEl.textContent  = lmRepCount === null ? '\u2014' : lmRepCount;
+  if (bestEl)  bestEl.textContent  = lmBest     === null ? '\u2014' : lmBest;
 
   const el = document.getElementById('last-month-breakdown');
   const emptyEl = document.getElementById('last-month-empty');
   if (!el) return;
 
-  if (archived.length === 0) {
+  /* Do not declare the month empty just because the background feed has not
+     landed. historyDays alone is enough to render the whole view. */
+  if (!lmTotal) {
     el.innerHTML = '';
     if (emptyEl) emptyEl.classList.remove('hidden');
     return;
