@@ -962,6 +962,184 @@
     .header-inner { padding: 14px 14px 0; }
     .container { padding-left: 14px; padding-right: 14px; }
   }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     NPS SCAN TRACKER  (added 2026-09-14)
+
+     Ported in from the standalone page at
+     blufoxmobile.github.io/NPS-Scan-Trracker so the scan data lives next
+     to the T-sheet data instead of in a second tab in Jeff's browser.
+     Two things had to change to make it a view rather than a page:
+
+       1. EVERY selector below is scoped under #view-nps. The standalone
+          file styled bare `table`, `th`, `td`, `select` and `button`,
+          which would otherwise have repainted the Daily grid, the modals
+          and the header controls on this page.
+
+       2. Its own light/dark token set is gone. The rule immediately below
+          just re-points the tracker's token names at this page's palette,
+          so it inherits the dashboard's theme rather than carrying a
+          second one that could drift out of sync.
+     ═══════════════════════════════════════════════════════════════════ */
+  #view-nps {
+    --series-1: #3987e5;
+    --series-1-soft: #1c3350;
+    --good: var(--positive);
+    --critical: var(--error);
+  }
+
+  /* Header row: status line left, range + refresh right. */
+  .nps-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .nps-sub { font-size: 13px; color: var(--text-dim); }
+  .nps-controls { margin-left: auto; display: flex; gap: 8px; }
+  #view-nps select,
+  #view-nps .nps-btn {
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 11px;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+  }
+  #view-nps select:hover,
+  #view-nps .nps-btn:hover { border-color: var(--text-dim); }
+  #view-nps .nps-btn[disabled] { opacity: 0.5; cursor: default; }
+
+  /* Five KPIs, so this overrides the 4-up grid the other tabs use. */
+  #view-nps .stats { grid-template-columns: repeat(2, 1fr); }
+  @media (min-width: 760px) {
+    #view-nps .stats { grid-template-columns: repeat(5, 1fr); }
+  }
+  #view-nps .stat.alert .stat-value { color: var(--critical); }
+
+  .nps-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+  }
+  .nps-cap { font-size: 12px; color: var(--text-faint); margin-bottom: 14px; }
+
+  /* DAILY BARS
+     .daybar is a percentage height, so its parent needs a DEFINITE height
+     or every bar collapses to min-height. .daytrack is that parent - do
+     not flatten these two elements back into one. */
+  .nps-daily { display: flex; align-items: flex-end; gap: 5px; }
+  .nps-daycol {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .nps-daytrack { width: 100%; height: 120px; display: flex; align-items: flex-end; }
+  .nps-daybar {
+    width: 100%;
+    background: var(--series-1);
+    border-radius: 4px 4px 0 0;
+    min-height: 2px;
+    transition: opacity 0.12s;
+  }
+  .nps-daycol:hover .nps-daybar { opacity: 0.75; }
+  .nps-daylab {
+    font-size: 9.5px;
+    color: var(--text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  /* TABLES
+     The store table's min-content width beats a phone screen even with the
+     hide-sm columns dropped, so each table gets its OWN scroll container -
+     same trick .daily-wrap uses for the Daily grid. Without this the whole
+     page scrolls sideways on a phone instead of just the table. */
+  .nps-tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .nps-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .nps-table th {
+    text-align: left;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    padding: 0 10px 8px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .nps-table td {
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  .nps-table tr:last-child td { border-bottom: none; }
+  .nps-table th.num, .nps-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .nps-store { font-weight: 600; }
+  .nps-code {
+    font-size: 11px;
+    color: var(--text-faint);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .nps-who { font-size: 12px; color: var(--text-dim); }
+  .nps-barcell { width: 150px; }
+  .nps-bartrack {
+    height: 7px;
+    background: var(--series-1-soft);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .nps-barfill { height: 100%; background: var(--series-1); border-radius: 4px; }
+  .nps-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .nps-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .nps-pill.zero { color: var(--critical); }
+  .nps-pill.zero .nps-dot { background: var(--critical); }
+  .nps-pill.ok { color: var(--good); }
+  .nps-pill.ok .nps-dot { background: var(--good); }
+  .nps-none { color: var(--critical); }
+
+  .nps-foot {
+    font-size: 12px;
+    color: var(--text-faint);
+    margin-top: 6px;
+    line-height: 1.6;
+  }
+  .nps-err {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid var(--error);
+    color: var(--text);
+    padding: 14px 16px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    margin-bottom: 16px;
+  }
+  .nps-loading { color: var(--text-dim); font-size: 14px; padding: 26px 0; }
+
+  @media (max-width: 720px) {
+    #view-nps .hide-sm { display: none; }
+    .nps-barcell { width: 80px; }
+  }
 </style>
 <!-- Perf (2026-09-03): this tag carried no `defer`, so HTML parsing stopped
      dead here until blufoxmobile.github.io answered. Measured: stalling
@@ -1005,8 +1183,9 @@
       <button class="tab active" data-view="overview">Overview</button>
       <button class="tab" data-view="rep">Reps</button>
       <button class="tab" data-view="daily">Daily</button>
-      <button class="tab" data-view="quote">Internet Quote Sheets</button>
       <button class="tab" data-view="last-month" id="tab-last-month">Last Month</button>
+      <button class="tab" data-view="quote">Internet Quote Sheets</button>
+      <button class="tab" data-view="nps">NPS Scan Tracker</button>
     </div>
   </div>
 </div>
@@ -1150,6 +1329,31 @@
     <div id="last-month-breakdown"></div>
     <div id="last-month-empty" class="empty hidden">
       No archived submissions found. The Apps Script needs to be updated to return the previous period's data — see the README in the repo.
+    </div>
+  </div>
+
+
+  <!-- NPS SCAN TRACKER (added 2026-09-14) - see the matching CSS block and
+       the script at the bottom of the page. This view is lazy: nothing is
+       fetched until the tab is opened for the first time. -->
+  <div class="view hidden" id="view-nps">
+    <div class="nps-head">
+      <div class="nps-sub" id="nps-sub">Not loaded yet</div>
+      <div class="nps-controls">
+        <select id="nps-range" aria-label="Scan window">
+          <option value="7">Last 7 days</option>
+          <option value="14">Last 14 days</option>
+          <option value="30" selected>Last 30 days</option>
+        </select>
+        <button class="nps-btn" id="nps-refresh" type="button">Refresh</button>
+      </div>
+    </div>
+    <div id="nps-err"></div>
+    <div id="nps-content" class="nps-loading">Fetching scan data…</div>
+    <div class="nps-foot">
+      This counts <b>scans</b>, not confirmed sends. Once the Messages app opens, what happens
+      next is between the phone and Comcast. A scan is strong evidence the rep offered the
+      process &mdash; which is the thing being measured.
     </div>
   </div>
 
@@ -3845,6 +4049,237 @@ setInterval(fetchData, 30000);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') fetchData();
 });
+</script>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   NPS SCAN TRACKER  (added 2026-09-14)
+
+   The tracker that used to live on its own at
+   blufoxmobile.github.io/NPS-Scan-Trracker, folded in as the last tab.
+
+   Everything is inside an IIFE on purpose. The standalone file declared
+   $, esc, render, load, fail and kpi as globals, and this page already
+   has its own render(). Without the wrapper the two would have fought
+   over the name and the dashboard would have stopped drawing.
+
+   The feed is a SECOND Apps Script deployment - not the T-sheet one and
+   not the Internet Quote Sheets one - so it is kept off the critical
+   path entirely: nothing is requested until the tab is opened. An
+   earlier version of a sibling tool hammered doGet from every open tab
+   every 30 seconds and blew through the Apps Script quota, so this one
+   deliberately does NOT poll. It refetches when Jeff opens the tab after
+   five minutes away, changes the range, or hits Refresh.
+   ═══════════════════════════════════════════════════════════════════════ */
+(function () {
+  var API_URL  = "https://script.google.com/macros/s/AKfycbwdQhMeMurysAnZlxoETk-6iF4CQaCHyolJZgH0DEUbbMih8hNzhtSs5PgfL5CsP-eA/exec";
+  var READ_KEY = "60769b541a544048b6293ca92af2be35";
+  var STALE_MS = 5 * 60 * 1000;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c];
+    });
+  };
+
+  var loadedAt = 0;
+  var inFlight = false;
+
+  /* Apps Script doGet supports a `callback` param, so JSONP sidesteps CORS. */
+  function jsonp(url, cb, onErr) {
+    var name = "__npscb" + Math.random().toString(36).slice(2);
+    var s = document.createElement("script");
+    var done = false;
+    window[name] = function (data) { done = true; cleanup(); cb(data); };
+    function cleanup() {
+      try { delete window[name]; } catch (e) { window[name] = undefined; }
+      if (s.parentNode) s.parentNode.removeChild(s);
+    }
+    s.onerror = function () {
+      if (!done) { cleanup(); onErr("Could not reach the logging endpoint."); }
+    };
+    setTimeout(function () {
+      if (!done) { cleanup(); onErr("Request timed out after 20 seconds."); }
+    }, 20000);
+    s.src = url + (url.indexOf("?") < 0 ? "?" : "&") + "callback=" + name;
+    document.body.appendChild(s);
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return "—";
+    var d = new Date(iso);
+    if (isNaN(d)) return "—";
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
+           d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+
+  function load() {
+    if (inFlight) return;
+    inFlight = true;
+    var days = $("nps-range").value;
+    $("nps-err").innerHTML = "";
+    $("nps-content").className = "nps-loading";
+    $("nps-content").textContent = "Fetching scan data…";
+    $("nps-refresh").disabled = true;
+
+    var url = API_URL + "?fn=stats&key=" + encodeURIComponent(READ_KEY) +
+              "&days=" + encodeURIComponent(days);
+    jsonp(url, function (d) {
+      inFlight = false;
+      $("nps-refresh").disabled = false;
+      if (!d || d.ok !== true) {
+        fail(d && d.error ? ("The API returned: " + d.error)
+                          : "The API returned an unexpected response.");
+        return;
+      }
+      loadedAt = Date.now();
+      draw(d);
+    }, function (msg) {
+      inFlight = false;
+      $("nps-refresh").disabled = false;
+      fail(msg);
+    });
+  }
+
+  function fail(msg) {
+    loadedAt = 0;
+    $("nps-content").innerHTML = "";
+    $("nps-content").className = "";
+    $("nps-err").innerHTML = '<div class="nps-err"><b>Could not load scan data.</b><br>' +
+      esc(msg) + '<br><br>Most likely causes: the Tracker Read Key no longer matches ' +
+      'the Config tab, or the Apps Script deployment URL changed.</div>';
+    $("nps-sub").textContent = "Last attempt failed";
+  }
+
+  function stat(label, value, note, alert) {
+    return '<div class="stat' + (alert ? ' alert' : '') + '">' +
+           '<div class="stat-label">' + esc(label) + '</div>' +
+           '<div class="stat-value">' + esc(value) + '</div>' +
+           (note ? '<div class="stat-sub">' + esc(note) + '</div>' : '') + '</div>';
+  }
+
+  function draw(d) {
+    var t = d.totals || {};
+    var stores = (d.stores || []).slice();
+    var daily = d.daily || [];
+    var dists = d.districts || [];
+    var i;
+
+    /* Worst performers to the top: zero-scan first, then ascending. */
+    stores.sort(function (a, b) {
+      if (a.scans !== b.scans) return a.scans - b.scans;
+      return String(a.name).localeCompare(String(b.name));
+    });
+
+    var max = 0;
+    for (i = 0; i < stores.length; i++) if (stores[i].scans > max) max = stores[i].scans;
+    var dmax = 0;
+    for (i = 0; i < daily.length; i++) if (daily[i].scans > dmax) dmax = daily[i].scans;
+
+    var h = '<div class="stats">';
+    h += stat("Total scans", t.scans || 0, d.windowDays + "-day window");
+    h += stat("Opt-ins (START)", t.start || 0, "scanned START");
+    h += stat("Opt-outs (STOP)", t.stop || 0, "scanned STOP");
+    h += stat("Stores with scans", (t.storesWithScans || 0) + " / " + (t.storesTotal || 0), "at least one");
+    h += stat("Zero-scan stores", t.storesZero || 0, "not offering the process", (t.storesZero || 0) > 0);
+    h += '</div>';
+
+    /* DAILY BARS - .nps-daybar is a percentage height, so .nps-daytrack has
+       to supply a definite height or every bar collapses to min-height. */
+    h += '<div class="section-title">Scans per day</div><div class="nps-card">' +
+         '<div class="nps-cap">Every scan logged in the window, by day.</div>' +
+         '<div class="nps-daily">';
+    if (!daily.length) {
+      h += '<div class="nps-cap" style="margin:0">No days in range.</div>';
+    } else {
+      for (i = 0; i < daily.length; i++) {
+        var day = daily[i];
+        var pct = dmax ? Math.round((day.scans / dmax) * 100) : 0;
+        var lbl = String(day.date).slice(5).replace("-", "/");
+        h += '<div class="nps-daycol" title="' + esc(day.date) + ' — ' + day.scans +
+             ' scan' + (day.scans === 1 ? "" : "s") + ' (' + day.start + ' start, ' +
+             day.stop + ' stop)">' +
+             '<div class="nps-daytrack"><div class="nps-daybar" style="height:' +
+             Math.max(pct, day.scans > 0 ? 4 : 1) + '%"></div></div>' +
+             '<div class="nps-daylab">' + esc(lbl) + '</div></div>';
+      }
+    }
+    h += '</div></div>';
+
+    /* BY STORE */
+    h += '<div class="section-title">By store</div><div class="nps-card">' +
+         '<div class="nps-cap">Sorted worst first &mdash; the stores at the top are the ones to call.</div>' +
+         '<div class="nps-tablewrap"><table class="nps-table"><thead><tr>' +
+         '<th>Store</th><th class="hide-sm">District / DM</th><th class="hide-sm">Store manager</th>' +
+         '<th class="num">Start</th><th class="num">Stop</th><th class="num">Total</th>' +
+         '<th class="nps-barcell"></th><th class="hide-sm">Last scan</th><th>Status</th>' +
+         '</tr></thead><tbody>';
+    for (i = 0; i < stores.length; i++) {
+      var s = stores[i];
+      var spct = max ? Math.round((s.scans / max) * 100) : 0;
+      var zero = !s.scans;
+      h += '<tr>' +
+        '<td><div class="nps-store">' + esc(s.name) + '</div><div class="nps-code">' +
+            esc(s.code) + '</div></td>' +
+        '<td class="hide-sm nps-who">' + esc(s.district || s.dmName || "—") + '</td>' +
+        '<td class="hide-sm nps-who">' + (s.managerName ? esc(s.managerName)
+            : '<span class="nps-none">none listed</span>') + '</td>' +
+        '<td class="num">' + (s.start || 0) + '</td>' +
+        '<td class="num">' + (s.stop || 0) + '</td>' +
+        '<td class="num"><b>' + (s.scans || 0) + '</b></td>' +
+        '<td class="nps-barcell"><div class="nps-bartrack"><div class="nps-barfill" style="width:' +
+            spct + '%"></div></div></td>' +
+        '<td class="hide-sm nps-who">' + esc(fmtDate(s.lastScan)) + '</td>' +
+        '<td>' + (zero
+            ? '<span class="nps-pill zero"><span class="nps-dot"></span>No scans</span>'
+            : '<span class="nps-pill ok"><span class="nps-dot"></span>Active</span>') + '</td>' +
+        '</tr>';
+    }
+    h += '</tbody></table></div></div>';
+
+    /* BY DISTRICT */
+    if (dists.length) {
+      h += '<div class="section-title">By district</div><div class="nps-card">' +
+           '<div class="nps-cap">Districts show the DM name until the DM &rarr; District map ' +
+           'on the Config tab is filled in.</div>' +
+           '<div class="nps-tablewrap"><table class="nps-table"><thead><tr><th>District</th><th class="num">Stores</th>' +
+           '<th class="num">Zero-scan</th><th class="num">Start</th><th class="num">Stop</th>' +
+           '<th class="num">Total</th></tr></thead><tbody>';
+      for (i = 0; i < dists.length; i++) {
+        var x = dists[i];
+        h += '<tr><td class="nps-store">' + esc(x.name) + '</td>' +
+          '<td class="num">' + (x.storeCount || 0) + '</td>' +
+          '<td class="num">' + ((x.storesZero || 0) > 0
+               ? '<span class="nps-none" style="font-weight:600">' + x.storesZero + '</span>'
+               : '0') + '</td>' +
+          '<td class="num">' + (x.start || 0) + '</td>' +
+          '<td class="num">' + (x.stop || 0) + '</td>' +
+          '<td class="num"><b>' + (x.scans || 0) + '</b></td></tr>';
+      }
+      h += '</tbody></table></div></div>';
+    }
+
+    $("nps-content").className = "";
+    $("nps-content").innerHTML = h;
+
+    var syncTxt = d.directory && d.directory.syncedAt
+        ? " · directory synced " + fmtDate(d.directory.syncedAt) : "";
+    $("nps-sub").textContent = "Updated " + fmtDate(d.generatedAt) + " · " +
+        (d.timezone || "") + syncTxt;
+  }
+
+  /* Lazy: first open fetches, later opens only refetch once the numbers are
+     five minutes stale. This is a second listener on the tab button - the
+     switchView wiring above already has its own and is left untouched. */
+  function openTab() {
+    if (!loadedAt || Date.now() - loadedAt > STALE_MS) load();
+  }
+
+  var tabBtn = document.querySelector('.tab[data-view="nps"]');
+  if (tabBtn) tabBtn.addEventListener('click', openTab);
+  $("nps-refresh").addEventListener('click', load);
+  $("nps-range").addEventListener('change', load);
+})();
 </script>
 </body>
 </html>
