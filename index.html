@@ -1812,6 +1812,26 @@ const TODAY_URL       = APPS_SCRIPT_URL + '?scope=today';
 const SUMMARY_URL     = APPS_SCRIPT_URL + '?scope=summary';
 const FULL_REFRESH_MS = 10 * 60 * 1000;
 
+/* ── ONE REQUEST PER STREAM, AND ONLY AS OFTEN AS IT CAN CHANGE (2026-09-24) ──
+   This SAME Apps Script deployment is the one every quote sheet POSTs t-sheets
+   to, and all of its executions run as Jeff, so they share one pool of
+   simultaneous executions. Measured 2026-09-24: scope=summary takes ~39 s to
+   answer, scope=today 3-7 s, the full feed 13-15 s. The 30-second poll used to
+   start a NEW summary and a new today read every 30 s whether or not the last
+   ones had finished, in every open tab (hidden ones included) - so each open
+   dashboard kept one or two 39-second summaries running around the clock, in
+   the same pool a rep's Submit has to get into.
+     - today:   every 30 s as before, but never two at once;
+     - summary: it only feeds days BEFORE today (today comes from the live
+                rows), so once per SUMMARY_REFRESH_MS, when the day rolls over,
+                or on a manual Refresh - and never two at once;
+     - quote feed: a different deployment in the same per-user pool; same rule;
+     - a hidden tab does not poll at all; it catches up when it is shown. */
+const SUMMARY_REFRESH_MS = 10 * 60 * 1000;
+const QUOTE_REFRESH_MS   = 5 * 60 * 1000;
+const inFlight = { today: null, summary: null, quote: null };
+let lastSummaryAt = 0, lastSummaryDay = '', lastQuoteAt = 0, summaryError = '';
+
 let todayRows   = null;  // scope=today rows, store names normalized
 let historyDays = null;  // scope=summary: { 'YYYY-MM-DD': { store: { rep: n } } }
 let lastFullAt  = 0;     // Date.now() of the last full-feed fetch
@@ -2098,7 +2118,7 @@ async function fetchData(isManual = false) {
   // endpoint 404'd on 2026-09-03 and succeeded on the next attempt.
   /* TODAY - the live path. 3.5 KB, ~1 s, every poll. This is what makes the
      page live and what removed the need for a placeholder snapshot. */
-  const todayReq = directoryReq
+  const todayReq = inFlight.today ? inFlight.today : (inFlight.today = directoryReq
     .then(() => fetchJson(TODAY_URL + '&t=' + Date.now(), { retries: 1 }))
     .then(data => {
       if (!data || !data.success) throw new Error(data && data.error ? data.error : 'today feed reported failure');
@@ -2116,19 +2136,24 @@ async function fetchData(isManual = false) {
       feedError = String((err && err.message) || err);
       console.error('today feed failed', err);
       paint();
-    });
+    })
+    .finally(() => { inFlight.today = null; }));
 
   /* HISTORY - MTD, the daily grid and Last Month. Counts only, one fetch,
      and the only source that covers the fiscal window completely. */
-  const summaryReq = directoryReq
-    .then(() => fetchJson(SUMMARY_URL + '&t=' + Date.now(), { retries: 1 }))
+  const needSummary = isManual || !historyDays || lastSummaryDay !== todayKey() ||
+                      (Date.now() - lastSummaryAt) > SUMMARY_REFRESH_MS;
+  const summaryReq = inFlight.summary ? inFlight.summary : !needSummary ? Promise.resolve() : (inFlight.summary = directoryReq
+    .then(() => fetchJson(SUMMARY_URL + '&t=' + Date.now(), { retries: 1, timeout: 60000 }))
     .then(data => {
       if (!data || !data.success) throw new Error(data && data.error ? data.error : 'summary reported failure');
       historyDays = data.days || null;
+      lastSummaryAt = Date.now(); lastSummaryDay = todayKey(); summaryError = '';
       if (historyDays && dataSource !== 'live') dataSource = 'live';
       paint();
     })
-    .catch(err => { console.error('summary feed failed', err); });
+    .catch(err => { summaryError = String((err && err.message) || err); console.error('summary feed failed', err); paint(); })
+    .finally(() => { inFlight.summary = null; }));
 
   /* FULL FEED - individual rows for PAST days, so the daily-grid modals keep
      working. Background only, at most every FULL_REFRESH_MS, and never on the
@@ -2156,10 +2181,12 @@ async function fetchData(isManual = false) {
   // so it was on the critical path for the Overview tab even though it only
   // feeds the Internet Quote Sheets tab. It is now fully independent.
   const quoteConfigured = QUOTE_SCRIPT_URL && QUOTE_SCRIPT_URL !== 'PASTE_QUOTE_SHEETS_WEB_APP_URL_HERE';
-  const quoteReq = (quoteConfigured
+  const needQuote = isManual || !lastQuoteAt || (Date.now() - lastQuoteAt) > QUOTE_REFRESH_MS;
+  const quoteReq = inFlight.quote ? inFlight.quote : !needQuote ? Promise.resolve() : (inFlight.quote = (quoteConfigured
     ? fetchJson(QUOTE_SCRIPT_URL + '?t=' + Date.now(), { retries: 1 })
     : Promise.resolve({ success: true, submissions: [] }))
     .then(quoteData => {
+      lastQuoteAt = Date.now();
       quoteSubmissions = (quoteData && quoteData.success && quoteData.submissions) || [];
       // The Internet Quote Sheet form returns short store names (e.g. "Evergreen Park").
       // Normalize them to the canonical "X Xfinity Store" form used by DISTRICTS so they
@@ -2167,7 +2194,8 @@ async function fetchData(isManual = false) {
       quoteSubmissions.forEach(s => { s.store = normalizeStoreName(s.store); });
       paint();
     })
-    .catch(err => { console.error('quote fetch failed', err); });
+    .catch(err => { console.error('quote fetch failed', err); })
+    .finally(() => { inFlight.quote = null; }));
 
   // MTD Fiscal Traffic from the Daily Sales Report xlsx. Independent as before,
   // but no longer gating the t-sheet numbers behind SheetJS finishing.
@@ -3918,7 +3946,17 @@ function renderLastMonthView() {
   if (!el) return;
 
   /* Do not declare the month empty just because the background feed has not
-     landed. historyDays alone is enough to render the whole view. */
+     landed. historyDays alone is enough to render the whole view.
+     And while NOTHING has landed yet (scope=summary takes ~40 s), say that -
+     the empty-state text below tells Jeff the Apps Script is broken, which is
+     what this tab used to show for the first 15-40 s of every visit. */
+  if (lmTotal === null) {
+    el.innerHTML = '<div class="empty">' + (summaryError
+      ? htmlEscape(label) + ' could not be loaded (' + htmlEscape(summaryError) + ') — it will retry on the next refresh.'
+      : 'Loading ' + htmlEscape(label) + ' — the summary feed takes up to a minute…') + '</div>';
+    if (emptyEl) emptyEl.classList.add('hidden');
+    return;
+  }
   if (!lmTotal) {
     el.innerHTML = '';
     if (emptyEl) emptyEl.classList.remove('hidden');
@@ -4044,7 +4082,9 @@ setInterval(updateTitleWithMonth, 60000); // refresh title every minute so it ro
 render();
 loadSnapshot();
 fetchData();
-setInterval(fetchData, 30000);
+// Hidden tabs do not poll (see inFlight above); the visibilitychange handler
+// below catches a tab up the moment it is shown again.
+setInterval(() => { if (document.visibilityState !== 'hidden') fetchData(); }, 30000);
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') fetchData();
