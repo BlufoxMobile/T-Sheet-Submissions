@@ -1575,9 +1575,9 @@ let internetsByStore = {}; // { 'Storename Xfinity Store': mtdHSISold }
 
 /* ============================================================
    DISTRICT ROSTER
-   Jeff moves stores between districts from the Admin Panel Directory
-   (https://blufoxmobile.github.io/Admin-Panel-Directory/), which publishes
-   store-directory.json. The roster below is the FALLBACK ONLY - it is what the
+   Jeff moves stores between districts from the Admin Panel Directory, which
+   publishes store-directory.json (Perf (2026-09-24): that page's address is no
+   longer kept in this file). The roster below is the FALLBACK ONLY - it is what the
    page runs on until that file lands, and what it keeps running on if the file
    is unreachable or malformed. The live file wins, including the district
    NAMES ("North Side", not "Chicago North") and the DM names, so renaming a
@@ -1672,7 +1672,9 @@ const DIRECTORY_URL = 'https://blufoxmobile.github.io/Daily-Sales-Report/data/st
 // must never leave Jeff looking at a blank dashboard - we draw with the roster
 // we have and the next 30s poll picks up the real one.
 const DIRECTORY_TIMEOUT_MS = 4000;
-const ADMIN_PANEL_URL = 'https://blufoxmobile.github.io/Admin-Panel-Directory/';
+// Perf (2026-09-24): the directory notice no longer links to the Admin Panel -
+// a non-public page that store staff cannot open - and its address is gone
+// from this file (see renderDirectoryNotice and the roster note above).
 
 // STORE_TO_DISTRICT stays the same object for the life of the page (plenty of
 // call sites captured it) - it is emptied and refilled, never replaced.
@@ -3182,8 +3184,7 @@ function renderDirectoryNotice(stores) {
   const lines = [];
   if (onFallback) {
     lines.push('<li><b>Store directory unavailable.</b> District assignments and names come ' +
-               'from this file\u2019s built-in fallback and may be stale \u2014 ' +
-               '<a href="' + ADMIN_PANEL_URL + '" target="_blank" rel="noopener">Admin Panel</a></li>');
+               'from this file\u2019s built-in fallback and may be stale.</li>');   // Perf (2026-09-24): no link to a non-public page
   }
   directoryIssues.forEach(i => {
     lines.push('<li><b>' + htmlEscape(storeShortName(i.store)) + '</b> ' + htmlEscape(i.problem) + '</li>');
