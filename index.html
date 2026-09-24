@@ -4167,6 +4167,11 @@ setInterval(updateTitleWithMonth, 60000); // refresh title every minute so it ro
    the file stays as a source and the banner only appears when something is
    genuinely wrong (see setFeedBanner). */
 render();
+// Perf (2026-09-24): cookcountycooks.com's tool viewer keeps its lid over this
+// frame until it hears the page has drawn (or `load`, whichever is first).
+// The shell above is the first render: tabs, search and headings are live and
+// every figure says "—" until its source lands. No-op when not framed.
+try { if (window.parent !== window) window.parent.postMessage({ source: 'ccc-tool', state: 'painted' }, '*'); } catch (e) {}
 loadSnapshot();
 fetchData();
 // Hidden tabs do not poll (see inFlight above); the visibilitychange handler
