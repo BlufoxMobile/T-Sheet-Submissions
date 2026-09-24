@@ -3751,6 +3751,29 @@ document.getElementById('modal').addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeModal();
 });
+// Perf (2026-09-24): KEYS FOR THE SITE. Framed in cookcountycooks.com's tool
+// viewer, a key pressed in this page never reaches the site, so Escape could
+// not close the viewer and Ctrl-K / Cmd-K could not open its Find. When framed,
+// those two keys go to the parent as { source: 'ccc-tool', action: 'escape' |
+// 'find' } - only when this page did not use the key itself: not while a detail
+// modal is open (Escape closes it, above), not Escape while typing a search,
+// not a key another handler already took. Not framed: no-op.
+if (window.parent !== window) {
+  let modalWasOpen = false;
+  window.addEventListener('keydown', () => {   // capture: before the modal's own Escape
+    modalWasOpen = document.getElementById('modal').classList.contains('open');
+  }, true);
+  window.addEventListener('keydown', e => {
+    if (e.defaultPrevented || e.isComposing || modalWasOpen) return;
+    const k = e.key, mod = e.metaKey || e.ctrlKey;
+    const action = (k === 'Escape' && !mod && !e.altKey && !e.shiftKey) ? 'escape'
+      : (mod && !e.altKey && !e.shiftKey && (k === 'k' || k === 'K')) ? 'find' : null;
+    if (!action) return;
+    if (action === 'escape' && e.target && e.target.id === 'search' && e.target.value) return;
+    if (action === 'find') e.preventDefault();   // not the browser's own Ctrl-K
+    try { window.parent.postMessage({ source: 'ccc-tool', action: action }, '*'); } catch (err) {}
+  });
+}
 
 /* ============================================================
    INTERNET QUOTE SHEETS
