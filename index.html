@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>T-Sheet Submissions</title>
-<!-- Perf (2026-09-02): `defer` so the 316 KB SheetJS download no longer blocks
-     parsing (a hung cdnjs used to leave this page blank); the feed fetches now
-     start in parallel with it. fetchSalesReportTraffic() waits for
-     DOMContentLoaded before touching XLSX, so the first render still carries
-     the traffic column exactly as before. -->
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- Perf (2026-09-24): SheetJS is no longer loaded up front (316 KB download,
+     ~150-190 ms of main-thread script evaluation). Traffic comes from the
+     prebuilt Daily-Sales-Report data/sales-report.json, and SheetJS loads on
+     demand (loadSheetJS) only when that file is missing or stale. See
+     PREBUILT WORKBOOK ROWS in the script below. (2026-09-02 had made this
+     script `defer` so a hung cdnjs could not leave the page blank.) -->
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -2064,6 +2064,19 @@ function retryFeed() {
   fetchData(true).finally(() => { feedRetrying = false; setFeedBanner(); });
 }
 
+/* Perf (2026-09-24): the two streams the ONE REQUEST PER STREAM block above
+   leaves out follow the same rule, on the same inFlight object:
+     - full feed: re-requested on every poll until its first answer lands, so a
+       slow one (13-15 s, 40 s cap, one retry) could be started again on top of
+       itself;
+     - traffic: reads the 1.15 MB Sales Report workbook, which changes once a
+       day - so on the first poll, then at most every FULL_REFRESH_MS (it was
+       every 30 s), retried each poll until a read succeeds. See TRAFFIC in
+       fetchData() and PREBUILT WORKBOOK ROWS below. */
+inFlight.full = null;
+inFlight.traffic = null;
+let lastTrafficAt = 0;   // last good Sales Report traffic read
+
 async function fetchData(isManual = false) {
   const dot = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
@@ -2159,7 +2172,7 @@ async function fetchData(isManual = false) {
      working. Background only, at most every FULL_REFRESH_MS, and never on the
      30-second path: this is the 2.4 MB request that was flooding the script. */
   const needFull = submissions.length === 0 || (Date.now() - lastFullAt) > FULL_REFRESH_MS;
-  const tSheetReq = !needFull ? Promise.resolve() : directoryReq
+  const tSheetReq = inFlight.full ? inFlight.full : !needFull ? Promise.resolve() : (inFlight.full = directoryReq   // Perf (2026-09-24): one at a time (inFlight)
     .then(() => { lastFullAt = Date.now(); return fetchJson(APPS_SCRIPT_URL + '?t=' + Date.now(), { retries: 1 }); })
     .then(data => {
       if (!data || !data.success) throw new Error(data && data.error ? data.error : 'feed reported failure');
@@ -2174,7 +2187,8 @@ async function fetchData(isManual = false) {
       // Background only: today and history already painted, so a failure here
       // costs past-day drill-down and nothing the user is looking at.
       console.warn('background full feed failed (past-day detail unavailable)', err);
-    });
+    })
+    .finally(() => { inFlight.full = null; }));   // Perf (2026-09-24)
 
   // INTERNET QUOTE SHEETS — a second ~837 KB Apps Script deployment on the same
   // platform, with the same intermittent 404. It was inside the old Promise.all,
@@ -2199,14 +2213,20 @@ async function fetchData(isManual = false) {
 
   // MTD Fiscal Traffic from the Daily Sales Report xlsx. Independent as before,
   // but no longer gating the t-sheet numbers behind SheetJS finishing.
-  const trafficReq = fetchSalesReportTraffic()
+  // Perf (2026-09-24): TRAFFIC. The workbook changes once a day; read it on the
+  // first poll, then at most every FULL_REFRESH_MS (it was every 30 s), and
+  // never twice at once (inFlight). Until a read succeeds, every poll retries.
+  const needTraffic = !trafficLoaded || (Date.now() - lastTrafficAt) > FULL_REFRESH_MS;
+  const trafficReq = inFlight.traffic ? inFlight.traffic : !needTraffic ? Promise.resolve() : (inFlight.traffic = fetchSalesReportTraffic()
     .then(trafficData => {
+      lastTrafficAt = Date.now();
       trafficByStore = (trafficData && trafficData.traffic) || {};
       internetsByStore = (trafficData && trafficData.internets) || {};
       trafficLoaded = true;
       paint();
     })
-    .catch(err => { console.error('traffic fetch failed', err); });
+    .catch(err => { console.error('traffic fetch failed', err); })
+    .finally(() => { inFlight.traffic = null; }));
 
   // The roster can land well before any feed does; repaint so a directory-only
   // change (or the fallback notice) is not held back by a slow feed.
@@ -2226,22 +2246,89 @@ function paint() {
   render();
 }
 
+/* ---- PREBUILT WORKBOOK ROWS ----
+   Perf (2026-09-24): the traffic column used to cost a download of the whole
+   1.15 MB workbook AND a full XLSX.read of all 8 sheets (~1.0-1.3 s of one
+   main-thread task, ~5 s on an iPad where this page shares cookcountycooks.com's
+   thread) on EVERY 30-second poll, to read one column of one sheet.
+   Daily-Sales-Report's update.yml writes data/sales-report.json from every
+   uploaded workbook with the same SheetJS 0.18.5 and the same
+   sheet_to_json({header:1, defval:null}) call as below, stamped with the
+   workbook's SHA-256. The page still downloads the workbook and uses the JSON
+   rows ONLY when that stamp matches the bytes it just downloaded, so the
+   traffic figures are identical. Missing, malformed or stale JSON (the minute
+   or two after an upload) falls back to parsing the workbook - now only the
+   Store Rank sheet. The workbook changes once a day, so fetchData() now asks
+   for it at most every FULL_REFRESH_MS (see TRAFFIC in fetchData above). */
+const SALES_JSON_URL = 'https://raw.githubusercontent.com/BlufoxMobile/Daily-Sales-Report/main/data/sales-report.json';
+// Same host, same ?t= and cache mode as the workbook fetch. Never rejects.
+function fetchSalesJson() {
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const killer = setTimeout(() => { if (ctrl) ctrl.abort(); }, 30000);
+  return fetch(SALES_JSON_URL + '?t=' + Date.now(), ctrl ? { signal: ctrl.signal } : undefined)
+    .then(r => r.ok ? r.json() : null)
+    .catch(() => null)
+    .then(j => { clearTimeout(killer); return j; });
+}
+// -> the JSON's sheets when it was built from exactly `buf`, else null.
+async function verifiedSalesRows(jsonReq, buf, names) {
+  try {
+    // ~4x smaller than the workbook, so it normally lands first; never hold
+    // the traffic more than 3 s past the workbook waiting for it.
+    const j = await Promise.race([jsonReq, new Promise(r => setTimeout(r, 3000, null))]);
+    if (!j || !j.source || !j.sheets || typeof j.source.sha256 !== 'string' || j.source.bytes !== buf.byteLength) return null;
+    // Built by the same SheetJS this page would load, or not used at all.
+    if (j.sheetjs !== '0.18.5') return null;
+    for (const n of names) if (!Array.isArray(j.sheets[n])) return null;
+    if (!(window.crypto && window.crypto.subtle)) return null;
+    const d = new Uint8Array(await window.crypto.subtle.digest('SHA-256', buf));
+    let hex = '';
+    for (let i = 0; i < d.length; i++) hex += (d[i] < 16 ? '0' : '') + d[i].toString(16);
+    return hex === j.source.sha256.toLowerCase() ? j.sheets : null;
+  } catch (e) { return null; }
+}
+let sheetJsReq = null;
+function loadSheetJS() {
+  if (typeof XLSX !== 'undefined') return Promise.resolve();
+  if (!sheetJsReq) sheetJsReq = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+    s.onload = () => resolve();
+    s.onerror = () => { sheetJsReq = null; s.remove(); reject(new Error('Could not load the spreadsheet reader (cdnjs)')); };
+    document.head.appendChild(s);
+  });
+  return sheetJsReq;
+}
+
 async function fetchSalesReportTraffic() {
-  // Perf (2026-09-02): SheetJS is deferred (see <head>). Deferred scripts run
-  // while readyState is already 'interactive' and DOMContentLoaded fires after
-  // they finish, so wait for DOMContentLoaded (or load, if the CDN script
-  // failed and DOMContentLoaded already went by) before the check below.
-  if (typeof XLSX === 'undefined' && document.readyState !== 'complete') {
-    await new Promise(r => { document.addEventListener('DOMContentLoaded', r, { once: true }); window.addEventListener('load', r, { once: true }); });
+  // Perf (2026-09-24): prebuilt rows when they were built from exactly these
+  // bytes, else SheetJS on demand reading only Store Rank. Replaces the
+  // 2026-09-02 wait for the deferred SheetJS script and the full XLSX.read.
+  // The workbook request is now bounded (40 s, like fetchJson) because
+  // fetchData() no longer starts a second one while this one is out.
+  const salesJson = fetchSalesJson();
+  const ctrl = new AbortController();
+  const killer = setTimeout(() => ctrl.abort(), 40000);
+  let buf;
+  try {
+    const resp = await fetch(SALES_REPORT_URL + '?t=' + Date.now(), { signal: ctrl.signal });
+    if (!resp.ok) throw new Error('Sales report HTTP ' + resp.status);
+    buf = await resp.arrayBuffer();
+  } catch (err) {
+    throw (err && err.name === 'AbortError') ? new Error('Sales report timed out after 40s') : err;
+  } finally { clearTimeout(killer); }
+  const pre = await verifiedSalesRows(salesJson, buf, ['Store Rank']);
+  let data;
+  if (pre) {
+    data = pre['Store Rank'];
+  } else {
+    await loadSheetJS();
+    const wb = XLSX.read(buf, { type: 'array', sheets: ['Store Rank'], cellFormula: false, cellHTML: false, cellText: false });
+    const ws = wb.Sheets['Store Rank'];
+    if (!ws) throw new Error('Store Rank sheet missing');
+    data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
   }
-  if (typeof XLSX === 'undefined') { console.warn('SheetJS not loaded'); return {}; }
-  const resp = await fetch(SALES_REPORT_URL + '?t=' + Date.now());
-  if (!resp.ok) throw new Error('Sales report HTTP ' + resp.status);
-  const buf = await resp.arrayBuffer();
-  const wb = XLSX.read(buf, { type: 'array' });
-  const ws = wb.Sheets['Store Rank'];
-  if (!ws) throw new Error('Store Rank sheet missing');
-  const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  console.info('[sales-report] ' + (pre ? 'rows from sales-report.json (sha256 matches the workbook)' : 'parsed the workbook (sales-report.json missing or stale)'));
 
   let headerRow = -1;
   for (let i = 0; i < Math.min(15, data.length); i++) {
